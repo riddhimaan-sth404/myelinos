@@ -19,4 +19,4 @@ test:
 	./tools/run_qemu.sh --test
 
 clean:
-	rm -rf build/bootstrap/rootfs build/images/myelinos-rootfs.ext4 build/images/vmlinuz
+	podman unshare rm -rf build/bootstrap/rootfs build/images/myelinos-rootfs.ext4 build/images/vmlinuz

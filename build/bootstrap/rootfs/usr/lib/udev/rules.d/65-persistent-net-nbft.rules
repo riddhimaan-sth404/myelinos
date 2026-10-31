@@ -1,2 +1,0 @@
-# Avoid renaming nbft$X interfaces
-SUBSYSTEM=="net", ACTION!="remove", ENV{INTERFACE}=="nbft*", NAME:="%E{INTERFACE}"
