@@ -211,6 +211,58 @@ def extract_cosmic_packages(root: Path):
     if (staging / "etc").exists():
         shutil.copytree(staging / "etc", root / "etc", dirs_exist_ok=True)
 
+    # Install robust start-cosmic launcher script
+    start_cosmic_path = root / "usr/bin/start-cosmic"
+    start_cosmic_path.write_text("""#!/usr/bin/sh
+# Robust start-cosmic launcher for MyelinOS
+
+if command -v systemctl >/dev/null 2>&1; then
+    FAILED_UNITS=$(systemctl --user --no-legend --state=failed --plain list-units 2>/dev/null | cut -f1 -d" " || true)
+    for unit in $FAILED_UNITS; do
+        partof="$(systemctl --user show -p PartOf --value "$unit" 2>/dev/null || true)"
+        for target in cosmic-session.target graphical-session.target; do
+            if [ "$partof" = "$target" ]; then
+                systemctl --user reset-failed "$unit" 2>/dev/null || true
+                break
+            fi
+        done
+    done
+fi
+
+if [ -n "${SHELL}" ]; then
+    if [ "${1}" != "--in-login-shell" ]; then
+        exec "${SHELL}" -l -c "${0} --in-login-shell"
+    fi
+fi
+
+export XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:=COSMIC}"
+export XDG_SESSION_DESKTOP="${XDG_SESSION_DESKTOP:=COSMIC}"
+export XDG_SESSION_TYPE="${XDG_SESSION_TYPE:=wayland}"
+export _JAVA_AWT_WM_NONREPARENTING=1
+export GDK_BACKEND=wayland,x11
+export MOZ_ENABLE_WAYLAND=1
+export QT_QPA_PLATFORM="wayland;xcb"
+export QT_AUTO_SCREEN_SCALE_FACTOR=1
+export QT_ENABLE_HIGHDPI_SCALING=1
+export DCONF_PROFILE=/usr/share/dconf/profile/cosmic
+
+if [ -z "$QT_QPA_PLATFORMTHEME" ]; then
+    export QT_QPA_PLATFORMTHEME=cosmic
+fi
+
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl --user import-environment XDG_SESSION_TYPE XDG_CURRENT_DESKTOP DCONF_PROFILE SSH_AUTH_SOCK 2>/dev/null || true
+fi
+
+# Run cosmic-session
+if [ -z "${DBUS_SESSION_BUS_ADDRESS}" ]; then
+    exec /usr/bin/dbus-run-session -- /usr/bin/cosmic-session
+else
+    exec /usr/bin/cosmic-session
+fi
+""")
+    start_cosmic_path.chmod(0o755)
+
     # Cleanup staging directory
     shutil.rmtree(staging, ignore_errors=True)
     print("COSMIC packages extracted successfully.")
@@ -538,10 +590,12 @@ def install_systemd_units(root: Path):
         "systemd-udevd-control.socket", "systemd-udevd-kernel.socket",
         "systemd-modules-load.service", "systemd-sysctl.service",
         "systemd-remount-fs.service", "systemd-tmpfiles-setup.service",
+        "systemd-tmpfiles-setup-dev.service",
         "systemd-random-seed.service", "systemd-networkd.service",
         "systemd-networkd.socket", "systemd-resolved.service",
         "systemd-timesyncd.service", "systemd-logind.service",
-        "systemd-user-sessions.service", "user.slice", "system.slice",
+        "systemd-user-sessions.service", "user@.service", "user-runtime-dir@.service",
+        "user.slice", "system.slice",
         "tmp.mount", "sshd.service", "dbus.socket", "dbus-daemon.service"
     ]
 
@@ -557,6 +611,34 @@ def install_systemd_units(root: Path):
                 shutil.copy2(src_path, sysd_dest / u)
             elif src_path.is_dir():
                 shutil.copytree(src_path, sysd_dest / u, dirs_exist_ok=True)
+
+    # Copy drop-in directories if present
+    for d_name in ["user@.service.d", "user-.slice.d"]:
+        src_d = sysd_src / d_name
+        if src_d.exists():
+            shutil.copytree(src_d, sysd_dest / d_name, dirs_exist_ok=True)
+
+    # Copy base systemd user units
+    user_src = Path("/usr/lib/systemd/user")
+    user_dest = root / "usr/lib/systemd/user"
+    user_dest.mkdir(parents=True, exist_ok=True)
+    if user_src.exists():
+        shutil.copytree(user_src, user_dest, dirs_exist_ok=True)
+
+    # PAM configuration for systemd-user
+    (root / "etc/pam.d/systemd-user").write_text("""#%PAM-1.0
+account  sufficient pam_unix.so
+account  required   pam_permit.so
+session  required   pam_loginuid.so
+session  optional   pam_keyinit.so force revoke
+session  required   pam_permit.so
+session  optional   pam_systemd.so
+""")
+
+    # Enable user lingering for cosmic user so user manager starts on boot
+    linger_dir = root / "var/lib/systemd/linger"
+    linger_dir.mkdir(parents=True, exist_ok=True)
+    (linger_dir / "cosmic").touch()
 
     # Set up dbus.service symlinks in /usr/lib and /etc/systemd/system
     dbus_svc = root / "usr/lib/systemd/system/dbus.service"
@@ -590,13 +672,15 @@ d /tmp/.X11-unix 1777 root root -
 """)
 
     # Enable essential services in sysinit / multi-user targets
-    for s in ["systemd-journald.service", "systemd-udevd.service"]:
+    for s in ["systemd-journald.service", "systemd-udevd.service",
+              "systemd-tmpfiles-setup.service", "systemd-tmpfiles-setup-dev.service",
+              "systemd-modules-load.service", "systemd-sysctl.service"]:
         link = root / "etc/systemd/system/sysinit.target.wants" / s
         if not link.exists():
             link.symlink_to(f"/usr/lib/systemd/system/{s}")
 
     for s in ["systemd-networkd.service", "systemd-resolved.service", "sshd.service",
-              "systemd-logind.service", "dbus.service"]:
+              "systemd-logind.service", "systemd-user-sessions.service", "dbus.service"]:
         target_name = "dbus-daemon.service" if s == "dbus.service" else s
         link = root / "etc/systemd/system/multi-user.target.wants" / s
         if link.exists() or link.is_symlink():
@@ -695,11 +779,16 @@ WantedBy=graphical.target
 Alias=display-manager.service
 """)
 
-    # Enable cosmic.service in graphical.target.wants
+    # Enable cosmic.service in graphical.target.wants and multi-user.target.wants
     cosmic_link = root / "etc/systemd/system/graphical.target.wants/cosmic.service"
     if cosmic_link.exists() or cosmic_link.is_symlink():
         cosmic_link.unlink()
     cosmic_link.symlink_to("/usr/lib/systemd/system/cosmic.service")
+
+    cosmic_multi = root / "etc/systemd/system/multi-user.target.wants/cosmic.service"
+    if cosmic_multi.exists() or cosmic_multi.is_symlink():
+        cosmic_multi.unlink()
+    cosmic_multi.symlink_to("/usr/lib/systemd/system/cosmic.service")
 
 def install_configuration_files(root: Path):
     """Install core LFS, user account, PAM, DRM/udev, and environment configurations."""

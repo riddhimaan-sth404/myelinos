@@ -8,6 +8,7 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 KERNEL="${ROOT_DIR}/build/images/vmlinuz"
 ROOTFS="${ROOT_DIR}/build/images/myelinos-rootfs.ext4"
+ISO_IMAGE="${ROOT_DIR}/build/images/myelinos-live.iso"
 MEMORY="${QEMU_MEM:-2048M}"
 SMP="${QEMU_SMP:-2}"
 VNC_PORT="${QEMU_VNC:-:1}"
@@ -18,9 +19,12 @@ usage() {
     echo ""
     echo "Options:"
     echo "  --interactive       Launch interactive QEMU session on serial console (default)"
+    echo "  --iso               Launch interactive Live ISO session in QEMU"
+    echo "  --iso-test          Run automated Live ISO verification test suite"
     echo "  --gui               Launch QEMU with a graphical window (GTK/SDL if host displays available)"
-    echo "  --test              Run automated verification test suite"
+    echo "  --test              Run automated verification test suite on disk image"
     echo "  --build             Rebuild rootfs image before running"
+    echo "  --build-iso         Rebuild Live ISO before running"
     echo "  -h, --help          Show this help message"
     echo ""
     echo "Environment Variables:"
@@ -40,9 +44,49 @@ usage() {
 # Auto-build if images don't exist
 ensure_images() {
     if [[ ! -f "${KERNEL}" || ! -f "${ROOTFS}" ]]; then
-        echo "[*] Images missing. Running bootstrap first..."
+        echo "[*] Disk image missing. Running bootstrap first..."
         python3 "${ROOT_DIR}/build/bootstrap/bootstrap.py"
     fi
+}
+
+ensure_iso() {
+    if [[ ! -f "${ISO_IMAGE}" ]]; then
+        echo "[*] Live ISO missing. Running build_iso.py first..."
+        python3 "${ROOT_DIR}/tools/build_iso.py"
+    fi
+}
+
+run_iso() {
+    ensure_iso
+    echo "=========================================================="
+    echo " Starting MyelinOS Live ISO (LFS systemd + COSMIC) in QEMU"
+    echo " - Live Medium:    ${ISO_IMAGE}"
+    echo " - Serial Console: Auto-login active on stdio"
+    echo " - COSMIC Desktop: VirtIO GPU display available at VNC localhost:5901"
+    echo " To exit: type 'poweroff' in root shell or press 'Ctrl-a x'"
+    echo "=========================================================="
+
+    KVM_ARG=""
+    if [[ -r /dev/kvm && -w /dev/kvm ]]; then
+        KVM_ARG="-enable-kvm"
+    fi
+
+    DISPLAY_OPTS=("-display" "${DISPLAY_BACKEND}" "-vnc" "${VNC_PORT}")
+    if [[ "${DISPLAY_BACKEND}" != "none" ]]; then
+        DISPLAY_OPTS=("-display" "${DISPLAY_BACKEND}")
+    fi
+
+    exec qemu-system-x86_64 \
+        ${KVM_ARG} \
+        -m "${MEMORY}" \
+        -smp "${SMP}" \
+        -cdrom "${ISO_IMAGE}" \
+        -boot d \
+        -netdev user,id=net0,hostfwd=tcp::2222-:22 \
+        -device virtio-net-pci,netdev=net0 \
+        -device virtio-vga \
+        -serial mon:stdio \
+        "${DISPLAY_OPTS[@]}"
 }
 
 run_interactive() {
@@ -85,6 +129,12 @@ run_test() {
     python3 "${SCRIPT_DIR}/test_boot.py"
 }
 
+run_iso_test() {
+    ensure_iso
+    echo "[*] Running automated Live ISO boot & display verification test..."
+    python3 "${SCRIPT_DIR}/test_iso_boot.py"
+}
+
 MODE="interactive"
 
 while [[ $# -gt 0 ]]; do
@@ -93,9 +143,16 @@ while [[ $# -gt 0 ]]; do
             MODE="interactive"
             shift
             ;;
+        --iso)
+            MODE="iso"
+            shift
+            ;;
+        --iso-test)
+            MODE="iso-test"
+            shift
+            ;;
         --gui)
             DISPLAY_BACKEND="gtk"
-            MODE="interactive"
             shift
             ;;
         --test)
@@ -105,6 +162,11 @@ while [[ $# -gt 0 ]]; do
         --build)
             echo "[*] Rebuilding bootstrap image..."
             python3 "${ROOT_DIR}/build/bootstrap/bootstrap.py"
+            shift
+            ;;
+        --build-iso)
+            echo "[*] Rebuilding Live ISO..."
+            python3 "${ROOT_DIR}/tools/build_iso.py" --force
             shift
             ;;
         -h|--help)
@@ -121,6 +183,10 @@ done
 
 if [[ "${MODE}" == "test" ]]; then
     run_test
+elif [[ "${MODE}" == "iso-test" ]]; then
+    run_iso_test
+elif [[ "${MODE}" == "iso" ]]; then
+    run_iso
 else
     run_interactive
 fi

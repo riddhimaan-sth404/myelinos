@@ -2,5 +2,6 @@ build/images/
 build/bootstrap/rootfs/
 build/bootstrap/cosmic_staging/
 build/bootstrap/__pycache__/
+build/iso_staging/
 build/packages/
 *.pyc
