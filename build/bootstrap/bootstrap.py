@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-MyelinOS LFS Bootstrap Script
-Constructs a minimal, workable Linux distribution based on the Linux From Scratch (LFS)
-systemd standard. Includes systemd as PID 1, core utilities, and standard LFS configuration.
+MyelinOS Full-Featured Headless Linux Distribution Bootstrap
+Constructs a complete, workable Linux distribution based on the Linux From Scratch (LFS)
+systemd standard. Contains all standard CLI utilities, system administration tools, networking,
+SSH server, Python 3 runtime, kernel modules, terminfo, SSL certificates, and systemd services.
 """
 
 import os
@@ -55,16 +56,20 @@ def create_directory_hierarchy(root: Path):
         shutil.rmtree(root)
 
     dirs = [
-        "usr/bin", "usr/sbin", "usr/lib", "usr/lib64",
+        "usr/bin", "usr/lib", "usr/lib64",
         "usr/lib/systemd/system", "usr/lib/systemd/system-generators",
-        "usr/local/bin", "usr/local/sbin", "usr/local/lib", "usr/local/lib/systemd/system",
+        "usr/lib/systemd/network",
+        "usr/local/bin", "usr/local/lib", "usr/local/lib/systemd/system",
+        "usr/share/terminfo", "usr/share/nano", "usr/share/vim", "usr/share/empty.sshd",
+        "usr/libexec/openssh",
         "etc/systemd/system", "etc/systemd/system/multi-user.target.wants",
         "etc/systemd/system/sysinit.target.wants", "etc/systemd/system/getty.target.wants",
-        "etc/pam.d", "etc/selinux",
+        "etc/systemd/network",
+        "etc/pam.d", "etc/selinux", "etc/ssh", "etc/ssl/certs", "etc/pki/tls/certs",
         "dev", "proc", "sys", "sys/fs/cgroup",
         "run", "run/systemd", "run/lock",
-        "tmp", "root", "home", "mnt",
-        "var/log", "var/tmp", "var/lib/systemd"
+        "tmp", "root", "home", "mnt", "opt",
+        "var/log", "var/tmp", "var/lib/systemd", "var/empty/sshd"
     ]
     for d in dirs:
         (root / d).mkdir(parents=True, exist_ok=True)
@@ -72,9 +77,11 @@ def create_directory_hierarchy(root: Path):
     # Standard UsrMerge and LFS compatibility symlinks
     symlinks = [
         ("bin", "usr/bin"),
-        ("sbin", "usr/sbin"),
+        ("sbin", "usr/bin"),
         ("lib", "usr/lib"),
         ("lib64", "usr/lib64"),
+        ("usr/sbin", "bin"),
+        ("usr/local/sbin", "bin"),
         ("var/run", "../run"),
         ("var/lock", "../run/lock"),
         ("etc/mtab", "/proc/self/mounts"),
@@ -88,83 +95,127 @@ def create_directory_hierarchy(root: Path):
                 link_path.unlink()
         link_path.symlink_to(target)
 
-    # /usr/sbin/init -> ../lib/systemd/systemd
-    init_symlink = root / "usr/sbin/init"
+    # /usr/bin/init -> ../lib/systemd/systemd
+    init_symlink = root / "usr/bin/init"
     if not init_symlink.exists():
         init_symlink.symlink_to("../lib/systemd/systemd")
 
 def install_binaries_and_libs(root: Path):
-    """Collect and install the minimal binary set and all shared libraries."""
-    binaries = [
+    """Collect and install the full CLI binary set and all shared libraries."""
+    all_bins = [
         # Systemd core & helpers
-        "/usr/lib/systemd/systemd",
-        "/usr/lib/systemd/systemd-executor",
-        "/usr/lib/systemd/systemd-journald",
-        "/usr/lib/systemd/systemd-udevd",
-        "/usr/lib/systemd/systemd-sysctl",
-        "/usr/lib/systemd/systemd-modules-load",
-        "/usr/lib/systemd/systemd-remount-fs",
-        "/usr/lib/systemd/systemd-tmpfiles",
-        "/usr/lib/systemd/systemd-random-seed",
-        "/usr/lib/systemd/systemd-logind",
-        "/usr/lib/systemd/systemd-user-runtime-dir",
-        "/usr/lib/systemd/systemd-shutdown",
-        "/usr/lib/systemd/systemd-sulogin-shell",
-        "/usr/lib/systemd/systemd-vconsole-setup",
+        "systemd", "systemd-executor", "systemd-journald", "systemd-udevd",
+        "systemd-sysctl", "systemd-modules-load", "systemd-remount-fs",
+        "systemd-tmpfiles", "systemd-random-seed", "systemd-logind",
+        "systemd-networkd", "systemd-resolved", "systemd-timesyncd",
+        "systemd-user-runtime-dir", "systemd-shutdown", "systemd-sulogin-shell",
+        "systemd-vconsole-setup",
         
-        # System management utilities
-        "/usr/bin/systemctl",
-        "/usr/bin/journalctl",
-        "/usr/bin/udevadm",
+        # System control & inspection
+        "systemctl", "journalctl", "udevadm", "loginctl", "timedatectl",
+        "localectl", "hostnamectl", "hostname", "bootctl", "busctl", "resolvectl", "networkctl",
         
-        # Shell
-        "/usr/bin/bash",
-        "/usr/bin/sh",
+        # Shells
+        "bash", "sh",
         
-        # GNU Core Utilities
-        "/usr/bin/ls", "/usr/bin/cat", "/usr/bin/echo", "/usr/bin/mkdir",
-        "/usr/bin/rmdir", "/usr/bin/cp", "/usr/bin/mv", "/usr/bin/rm",
-        "/usr/bin/uname", "/usr/bin/ps", "/usr/bin/kill", "/usr/bin/stty",
-        "/usr/bin/sync", "/usr/bin/sleep", "/usr/bin/env", "/usr/bin/id",
-        "/usr/bin/whoami", "/usr/bin/pwd", "/usr/bin/grep", "/usr/bin/sed",
-        "/usr/bin/find", "/usr/bin/head", "/usr/bin/tail", "/usr/bin/wc",
-        "/usr/bin/date", "/usr/bin/touch", "/usr/bin/chmod", "/usr/bin/chown",
-        "/usr/bin/true", "/usr/bin/false",
+        # GNU Core Utilities (Full Set)
+        "cat", "chgrp", "chmod", "chown", "cp", "date", "dd", "df", "dmesg",
+        "echo", "false", "ln", "ls", "mkdir", "mknod", "mktemp", "mv", "pwd",
+        "rm", "rmdir", "sleep", "stty", "sync", "touch", "true", "uname",
+        "readlink", "realpath", "truncate", "stat", "shred", "basename",
+        "dirname", "cut", "head", "tail", "wc", "sort", "uniq", "tr", "tee",
+        "fold", "split", "join", "comm", "paste", "csplit", "expand", "unexpand",
+        "fmt", "pr", "nl", "od", "base64", "base32", "basenc", "md5sum",
+        "sha1sum", "sha256sum", "sha512sum", "b2sum", "cksum", "env", "printenv",
+        "expr", "factor", "seq", "shuf", "yes", "id", "whoami", "groups", "users",
+        "who", "w", "uptime", "logname", "tty", "nproc", "du", "test", "[",
         
-        # Util-linux
-        "/usr/sbin/agetty",
-        "/usr/bin/login",
-        "/usr/bin/mount",
-        "/usr/bin/umount",
-        "/usr/sbin/sulogin",
-        "/usr/bin/dmesg",
-        "/usr/sbin/poweroff",
-        "/usr/sbin/reboot",
-        "/usr/sbin/halt",
+        # Find & text stream processing
+        "find", "xargs", "grep", "egrep", "fgrep", "sed", "gawk", "awk",
+        "which", "whereis", "file", "diff", "cmp", "patch",
+        
+        # Text editors & pagers
+        "less", "more", "nano", "vi",
+        
+        # Terminal management
+        "clear", "reset", "tput",
+        
+        # Process monitoring & control (procps-ng)
+        "ps", "top", "free", "kill", "killall", "pkill", "pgrep", "pidof",
+        "watch", "timeout", "nice", "renice", "nohup",
+        
+        # Archiving & compression
+        "tar", "cpio", "gzip", "gunzip", "zcat", "bzip2", "bunzip2", "bzcat",
+        "xz", "unxz", "xzcat", "zstd", "unzstd", "zstdcat",
+        
+        # Disk & filesystem administration
+        "mount", "umount", "findmnt", "lsblk", "blkid", "fdisk", "cfdisk",
+        "sfdisk", "partx", "wipefs", "losetup", "fallocate", "fstrim", "fsfreeze",
+        "mke2fs", "mkfs", "mkfs.ext2", "mkfs.ext3", "mkfs.ext4", "e2fsck", "fsck",
+        "fsck.ext4", "tune2fs", "resize2fs", "dumpe2fs", "chattr", "lsattr",
+        "mkswap", "swapon", "swapoff",
+        
+        # Kernel modules & hardware
+        "kmod", "modprobe", "insmod", "rmmod", "lsmod", "modinfo", "depmod",
+        "lscpu", "setarch", "taskset", "chcpu", "ionice",
+        
+        # Networking & remote access
+        "ip", "ss", "bridge", "rtmon", "ping", "curl", "wget",
+        "ssh", "sshd", "scp", "sftp", "ssh-keygen", "ssh-agent", "ssh-add",
+        
+        # Account management
+        "useradd", "userdel", "usermod", "groupadd", "groupdel", "groupmod",
+        "passwd", "chage", "su", "sulogin", "agetty", "login",
+        
+        # Power & runlevel control
+        "poweroff", "reboot", "halt", "shutdown",
+        
+        # Scripting & system inspection
+        "python3", "ldconfig", "lsof", "man", "groff"
     ]
 
     all_libs = set()
+    copied_bins = 0
 
-    # Copy binaries
-    for b in binaries:
-        if os.path.islink(b):
-            target = os.readlink(b)
-            dest = root / b.lstrip("/")
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            if dest.is_symlink() or dest.exists():
-                dest.unlink()
-            dest.symlink_to(target)
-            real_b = os.path.realpath(b)
-            if os.path.exists(real_b):
-                real_dest = root / real_b.lstrip("/")
-                real_dest.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(real_b, real_dest)
-                resolve_deps(real_b, all_libs)
-        elif os.path.exists(b):
-            dest = root / b.lstrip("/")
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(b, dest)
-            resolve_deps(b, all_libs)
+    # Locate and copy all binaries
+    for name in all_bins:
+        # Search path or specific location
+        path = shutil.which(name)
+        if not path:
+            candidate = Path("/usr/lib/systemd") / name
+            if candidate.exists():
+                path = str(candidate)
+            else:
+                candidate = Path("/usr/sbin") / name
+                if candidate.exists():
+                    path = str(candidate)
+        
+        if path and os.path.exists(path):
+            if os.path.islink(path):
+                target = os.readlink(path)
+                dest = root / path.lstrip("/")
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                if dest.is_symlink() or dest.exists():
+                    dest.unlink()
+                dest.symlink_to(target)
+                real_p = os.path.realpath(path)
+                if os.path.exists(real_p):
+                    real_dest = root / real_p.lstrip("/")
+                    real_dest.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(real_p, real_dest)
+                    resolve_deps(real_p, all_libs)
+            else:
+                dest = root / path.lstrip("/")
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(path, dest)
+                resolve_deps(path, all_libs)
+            copied_bins += 1
+
+    # Python link /usr/bin/python -> python3
+    py_link = root / "usr/bin/python"
+    if py_link.exists() or py_link.is_symlink():
+        py_link.unlink()
+    py_link.symlink_to("python3")
 
     # Copy all binaries in /usr/lib/systemd
     for item in Path("/usr/lib/systemd").iterdir():
@@ -181,6 +232,18 @@ def install_binaries_and_libs(root: Path):
         for gen in (root / "usr/lib/systemd/system-generators").iterdir():
             if gen.is_file() and os.access(gen, os.X_OK):
                 resolve_deps(str(gen), all_libs)
+
+    # Copy Python 3.14 standard library
+    py_lib_src = Path("/usr/lib64/python3.14")
+    py_lib_dest = root / "usr/lib64/python3.14"
+    if py_lib_src.exists():
+        print("Copying Python 3.14 standard library...")
+        shutil.copytree(py_lib_src, py_lib_dest, dirs_exist_ok=True, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        # Resolve dependencies of python dynload C extensions
+        dynload = py_lib_src / "lib-dynload"
+        if dynload.exists():
+            for so in dynload.glob("*.so"):
+                resolve_deps(str(so), all_libs)
 
     # Include NSS, PAM, BPF, kmod, seccomp, cryptsetup libs explicitly
     for p in Path("/usr/lib64").glob("libnss*"):
@@ -203,6 +266,7 @@ def install_binaries_and_libs(root: Path):
         resolve_deps(lib, all_libs)
 
     # Copy all libraries
+    print(f"Installing {len(all_libs)} shared libraries...")
     for lib in all_libs:
         if os.path.exists(lib):
             dest = root / lib.lstrip("/")
@@ -210,12 +274,65 @@ def install_binaries_and_libs(root: Path):
             if not dest.exists():
                 shutil.copy2(lib, dest)
 
+    # Copy terminfo database
+    if Path("/usr/share/terminfo").exists():
+        print("Copying terminfo database...")
+        shutil.copytree("/usr/share/terminfo", root / "usr/share/terminfo", dirs_exist_ok=True)
+
+    # Copy C.utf8 locale
+    loc_src = Path("/usr/lib/locale/C.utf8")
+    if loc_src.exists():
+        print("Copying C.utf8 locale...")
+        loc_dest = root / "usr/lib/locale/C.utf8"
+        loc_dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(loc_src, loc_dest, dirs_exist_ok=True)
+        c_upper = root / "usr/lib/locale/C.UTF-8"
+        if not c_upper.exists():
+            c_upper.symlink_to("C.utf8")
+
+    # Copy nano syntax definitions
+    if Path("/usr/share/nano").exists():
+        shutil.copytree("/usr/share/nano", root / "usr/share/nano", dirs_exist_ok=True)
+    if Path("/etc/nanorc").exists():
+        shutil.copy2("/etc/nanorc", root / "etc/nanorc")
+
+    # Copy vim runtime
+    if Path("/usr/share/vim").exists():
+        shutil.copytree("/usr/share/vim", root / "usr/share/vim", dirs_exist_ok=True)
+
+    # Copy CA certificates
+    ca_file = Path("/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem")
+    if ca_file.exists():
+        print("Copying SSL CA certificates...")
+        (root / "etc/ssl/certs").mkdir(parents=True, exist_ok=True)
+        (root / "etc/pki/tls/certs").mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ca_file, root / "etc/ssl/certs/ca-certificates.crt")
+        shutil.copy2(ca_file, root / "etc/pki/tls/certs/ca-bundle.crt")
+
+    # Copy kernel modules
+    mod_src = Path("/lib/modules/7.2.11-200.fc44.x86_64")
+    mod_dest = root / "lib/modules/7.2.11-200.fc44.x86_64"
+    if mod_src.exists():
+        print("Copying kernel modules...")
+        shutil.copytree(mod_src, mod_dest, dirs_exist_ok=True, ignore=shutil.ignore_patterns("build", "source"))
+
+    # Copy all helpers in /usr/libexec/openssh
+    ssh_libexec = Path("/usr/libexec/openssh")
+    if ssh_libexec.exists():
+        dest_ssh_libexec = root / "usr/libexec/openssh"
+        shutil.copytree(ssh_libexec, dest_ssh_libexec, dirs_exist_ok=True)
+        for item in dest_ssh_libexec.iterdir():
+            if item.is_file() and os.access(item, os.X_OK):
+                resolve_deps(str(item), all_libs)
+
     # Copy udev rules
     if Path("/usr/lib/udev/rules.d").exists():
         shutil.copytree("/usr/lib/udev/rules.d", root / "usr/lib/udev/rules.d", dirs_exist_ok=True)
 
+    print(f"Installed {copied_bins} binaries and {len(all_libs)} dynamic libraries.")
+
 def install_systemd_units(root: Path):
-    """Install core systemd unit files and establish target relationships."""
+    """Install core systemd unit files, targets, and networking services."""
     sysd_src = Path("/usr/lib/systemd/system")
     sysd_dest = root / "usr/lib/systemd/system"
     if sysd_src.exists():
@@ -223,6 +340,7 @@ def install_systemd_units(root: Path):
             "basic.target", "sysinit.target", "multi-user.target", "default.target",
             "emergency.target", "emergency.service", "rescue.target", "rescue.service",
             "local-fs.target", "local-fs-pre.target", "remote-fs.target", "remote-fs-pre.target",
+            "network.target", "network-online.target", "network-pre.target",
             "slices.target", "sockets.target", "timers.target", "paths.target",
             "shutdown.target", "reboot.target", "poweroff.target", "halt.target",
             "systemd-journald.service", "systemd-journald.socket",
@@ -230,9 +348,12 @@ def install_systemd_units(root: Path):
             "systemd-udevd.service", "systemd-udevd-control.socket", "systemd-udevd-kernel.socket",
             "systemd-remount-fs.service", "systemd-tmpfiles-setup.service", "systemd-tmpfiles-setup-dev.service",
             "systemd-sysctl.service", "systemd-modules-load.service", "systemd-random-seed.service",
+            "systemd-networkd.service", "systemd-networkd.socket", "systemd-networkd-wait-online.service",
+            "systemd-resolved.service", "systemd-timesyncd.service",
             "serial-getty@.service", "getty@.service", "console-getty.service",
             "systemd-logind.service", "systemd-user-sessions.service",
-            "systemd-vconsole-setup.service"
+            "systemd-vconsole-setup.service",
+            "sshd.service", "sshd@.service", "sshd.socket"
         ]
         for u in units_to_copy:
             src_path = sysd_src / u
@@ -252,11 +373,27 @@ def install_systemd_units(root: Path):
         default_target.unlink()
     default_target.symlink_to("/usr/lib/systemd/system/multi-user.target")
 
-    # Enable journald and udevd
+    # Enable essential services in sysinit / multi-user targets
     for s in ["systemd-journald.service", "systemd-udevd.service"]:
         link = root / "etc/systemd/system/sysinit.target.wants" / s
         if not link.exists():
             link.symlink_to(f"/usr/lib/systemd/system/{s}")
+
+    for s in ["systemd-networkd.service", "systemd-resolved.service", "sshd.service"]:
+        src_unit = sysd_src / s
+        if src_unit.exists():
+            link = root / "etc/systemd/system/multi-user.target.wants" / s
+            if link.exists() or link.is_symlink():
+                link.unlink()
+            link.symlink_to(f"/usr/lib/systemd/system/{s}")
+
+    # DHCP Network configuration for all ethernet interfaces
+    (root / "etc/systemd/network/80-dhcp.network").write_text("""[Match]
+Name=en* eth*
+
+[Network]
+DHCP=yes
+""")
 
     # Clean serial getty unit without dev-ttyS0 device binding for direct serial boot
     serial_unit = root / "etc/systemd/system/serial-getty@.service"
@@ -269,7 +406,7 @@ Conflicts=rescue.service
 Before=rescue.service
 
 [Service]
-ExecStart=-/usr/sbin/agetty --autologin root --noclear 115200 %I linux
+ExecStart=-/usr/bin/agetty --autologin root --noclear 115200 %I linux
 Type=idle
 Restart=always
 UtmpIdentifier=%I
@@ -296,7 +433,7 @@ WantedBy=getty.target
         console_link.symlink_to("/usr/lib/systemd/system/console-getty.service")
 
 def install_configuration_files(root: Path):
-    """Install LFS system configuration files."""
+    """Install LFS system configuration files, SSH host keys, user databases, and shell profiles."""
     # /etc/os-release
     (root / "etc/os-release").write_text("""NAME="MyelinOS"
 PRETTY_NAME="MyelinOS 0.1 (LFS systemd)"
@@ -315,11 +452,16 @@ HOME_URL="https://github.com/myelinos"
 ::1         localhost ip6-localhost ip6-loopback
 """)
 
+    # /etc/resolv.conf
+    (root / "etc/resolv.conf").write_text("""nameserver 8.8.8.8
+nameserver 1.1.1.1
+""")
+
     # /etc/nsswitch.conf
     (root / "etc/nsswitch.conf").write_text("""passwd:      files
 group:       files
 shadow:      files
-hosts:       files dns
+hosts:       files resolve [!UNAVAIL=return] dns
 networks:    files
 protocols:   files
 services:    files
@@ -333,6 +475,12 @@ bin:x:1:1:bin:/bin:/bin/false
 daemon:x:2:2:daemon:/sbin:/bin/false
 adm:x:3:4:adm:/var/adm:/bin/false
 lp:x:4:7:lp:/var/spool/lpd:/bin/false
+sync:x:5:0:sync:/sbin:/bin/sync
+shutdown:x:6:0:shutdown:/sbin:/sbin/shutdown
+halt:x:7:0:halt:/sbin:/sbin/halt
+mail:x:8:12:mail:/var/spool/mail:/bin/false
+operator:x:11:0:operator:/root:/bin/false
+sshd:x:74:74:Privilege-separated SSH:/usr/share/empty.sshd:/bin/false
 systemd-journal:x:999:999:systemd-journal:/:/bin/false
 systemd-network:x:998:998:systemd-network:/:/bin/false
 systemd-resolve:x:997:997:systemd-resolve:/:/bin/false
@@ -347,6 +495,12 @@ bin:*:19000:0:99999:7:::
 daemon:*:19000:0:99999:7:::
 adm:*:19000:0:99999:7:::
 lp:*:19000:0:99999:7:::
+sync:*:19000:0:99999:7:::
+shutdown:*:19000:0:99999:7:::
+halt:*:19000:0:99999:7:::
+mail:*:19000:0:99999:7:::
+operator:*:19000:0:99999:7:::
+sshd:*:19000:0:99999:7:::
 systemd-journal:*:19000:0:99999:7:::
 systemd-network:*:19000:0:99999:7:::
 systemd-resolve:*:19000:0:99999:7:::
@@ -364,12 +518,15 @@ adm:x:4:
 tty:x:5:
 disk:x:6:
 lp:x:7:
+mem:x:8:
 kmem:x:9:
 wheel:x:10:root
 cdrom:x:11:
+mail:x:12:
 audio:x:63:
 video:x:39:
 utmp:x:43:
+sshd:x:74:
 systemd-journal:x:999:
 systemd-network:x:998:
 systemd-resolve:x:997:
@@ -386,15 +543,27 @@ tmpfs       /tmp    tmpfs   defaults,nosuid,nodev 0 0
     # /etc/profile
     (root / "etc/profile").write_text(r"""export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export TERM=linux
+export LANG=C.UTF-8
+export LC_ALL=C.UTF-8
 export HOME=/root
 export USER=root
 export PS1='[\u@\h \W]\$ '
 umask 022
 cd /root
+
+alias ls='ls --color=auto'
+alias ll='ls -la --color=auto'
+alias la='ls -A --color=auto'
+alias l='ls -CF --color=auto'
+alias grep='grep --color=auto'
+alias egrep='egrep --color=auto'
+alias fgrep='fgrep --color=auto'
 """)
 
     # /root/.bashrc
     (root / "root/.bashrc").write_text(r"""export PS1='[\u@\h \W]\$ '
+alias ll='ls -la --color=auto'
+alias la='ls -A --color=auto'
 """)
 
     # /etc/issue
@@ -439,9 +608,39 @@ account     required    pam_permit.so
 password    required    pam_permit.so
 session     required    pam_permit.so
 """)
+    (root / "etc/pam.d/sshd").write_text("""#%PAM-1.0
+auth        sufficient  pam_permit.so
+auth        required    pam_unix.so nullok
+account     required    pam_permit.so
+password    required    pam_permit.so
+session     required    pam_permit.so
+""")
+
+    # OpenSSH Server configuration
+    ssh_dir = root / "etc/ssh"
+    ssh_dir.mkdir(parents=True, exist_ok=True)
+    (ssh_dir / "sshd_config").write_text("""Port 22
+ListenAddress 0.0.0.0
+PermitRootLogin yes
+PermitEmptyPasswords yes
+PasswordAuthentication yes
+ChallengeResponseAuthentication no
+UsePAM yes
+PrintMotd no
+Subsystem sftp /usr/libexec/openssh/sftp-server
+""")
+
+    # Pre-generate SSH Host Keys
+    for ktype in ["ed25519", "rsa", "ecdsa"]:
+        key_file = ssh_dir / f"ssh_host_{ktype}_key"
+        if not key_file.exists():
+            subprocess.run(
+                ["ssh-keygen", "-t", ktype, "-f", str(key_file), "-N", "", "-q"],
+                check=False
+            )
 
 def build_disk_image():
-    """Create ext4 filesystem disk image using podman unshare for proper root permissions."""
+    """Create a 1.5GB ext4 filesystem disk image using podman unshare for proper root permissions."""
     IMAGES_DIR.mkdir(parents=True, exist_ok=True)
     
     # Copy kernel if not already in images
@@ -457,17 +656,21 @@ def build_disk_image():
     chmod 1777 {ROOTFS_DIR}/tmp
     chmod 4755 {ROOTFS_DIR}/usr/bin/mount
     chmod 4755 {ROOTFS_DIR}/usr/bin/umount
+    chmod 4755 {ROOTFS_DIR}/usr/bin/su
+    chmod 4755 {ROOTFS_DIR}/usr/bin/passwd
+    chmod 4755 {ROOTFS_DIR}/usr/bin/ping
     chmod 600 {ROOTFS_DIR}/etc/shadow
+    chmod 600 {ROOTFS_DIR}/etc/ssh/*_key 2>/dev/null || true
     chmod 644 {ROOTFS_DIR}/etc/passwd {ROOTFS_DIR}/etc/group
     chmod 664 {ROOTFS_DIR}/var/run/utmp {ROOTFS_DIR}/var/log/wtmp {ROOTFS_DIR}/var/log/lastlog
     chown -R 0:0 {ROOTFS_DIR}
-    mke2fs -t ext4 -d {ROOTFS_DIR} -m 0 -F {ROOTFS_IMG} 200M
+    mke2fs -t ext4 -d {ROOTFS_DIR} -m 0 -F {ROOTFS_IMG} 1500M
     """
     subprocess.check_call(["podman", "unshare", "sh", "-c", cmd])
     print(f"Successfully generated bootable rootfs image: {ROOTFS_IMG}")
 
 def main():
-    print("=== MyelinOS LFS Bootstrap Starting ===")
+    print("=== MyelinOS Full Headless LFS Bootstrap Starting ===")
     print(f"Target Rootfs Directory: {ROOTFS_DIR}")
     print(f"Target Image:            {ROOTFS_IMG}")
     print(f"Target Kernel:           {KERNEL_DEST}")
@@ -477,7 +680,7 @@ def main():
     install_systemd_units(ROOTFS_DIR)
     install_configuration_files(ROOTFS_DIR)
     build_disk_image()
-    print("=== MyelinOS LFS Bootstrap Complete ===")
+    print("=== MyelinOS Full Headless LFS Bootstrap Complete ===")
 
 if __name__ == "__main__":
     main()

@@ -52,6 +52,8 @@ run_interactive() {
         -smp "${SMP}" \
         -kernel "${KERNEL}" \
         -drive file="${ROOTFS}",format=raw,if=virtio \
+        -netdev user,id=net0,hostfwd=tcp::2222-:22 \
+        -device virtio-net-pci,netdev=net0 \
         -append "root=/dev/vda rw console=ttyS0 init=/usr/lib/systemd/systemd audit=0 selinux=0 enforcing=0 quiet" \
         -nographic
 }

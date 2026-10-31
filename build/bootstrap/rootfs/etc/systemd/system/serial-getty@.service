@@ -7,7 +7,7 @@ Conflicts=rescue.service
 Before=rescue.service
 
 [Service]
-ExecStart=-/usr/sbin/agetty --autologin root --noclear 115200 %I linux
+ExecStart=-/usr/bin/agetty --autologin root --noclear 115200 %I linux
 Type=idle
 Restart=always
 UtmpIdentifier=%I
