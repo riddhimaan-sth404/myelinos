@@ -1,0 +1,7 @@
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export TERM=linux
+export HOME=/root
+export USER=root
+export PS1='[\u@\h \W]\$ '
+umask 022
+cd /root

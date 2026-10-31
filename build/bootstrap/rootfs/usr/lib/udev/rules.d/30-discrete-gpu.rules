@@ -1,0 +1,5 @@
+DRIVERS=="amdgpu", SUBSYSTEM=="drm", PROGRAM="/usr/libexec/switcheroo-control-check-discrete-amdgpu $env{DEVNAME}", TAG+="switcheroo-discrete-gpu"
+DRIVERS=="nouveau", SUBSYSTEM=="drm", PROGRAM="/usr/libexec/switcheroo-control-check-discrete-nouveau $env{DEVNAME}", TAG+="switcheroo-discrete-gpu"
+DRIVERS=="nvidia", SUBSYSTEM=="drm", TAG+="switcheroo-discrete-gpu"
+DRIVERS=="i915", SUBSYSTEM=="drm", DEVPATH!="/devices/pci0000:00/0000:00:02.0/drm/*", TAG+="switcheroo-discrete-gpu"
+DRIVERS=="xe", SUBSYSTEM=="drm", PROGRAM="/usr/libexec/switcheroo-control-check-discrete-xe $env{DEVNAME}", TAG+="switcheroo-discrete-gpu"

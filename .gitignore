@@ -1,0 +1,3 @@
+build/images/myelinos-rootfs.ext4
+build/images/vmlinuz
+build/bootstrap/rootfs/

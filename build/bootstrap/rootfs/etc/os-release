@@ -1,0 +1,7 @@
+NAME="MyelinOS"
+PRETTY_NAME="MyelinOS 0.1 (LFS systemd)"
+ID=myelinos
+ID_LIKE=lfs
+VERSION="0.1"
+VERSION_ID="0.1"
+HOME_URL="https://github.com/myelinos"

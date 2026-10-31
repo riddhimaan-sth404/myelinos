@@ -1,0 +1,23 @@
+[Unit]
+Description=Serial Getty on %I
+Documentation=man:agetty(8)
+After=systemd-user-sessions.service getty-pre.target
+Before=getty.target
+Conflicts=rescue.service
+Before=rescue.service
+
+[Service]
+ExecStart=-/usr/sbin/agetty --autologin root --noclear 115200 %I linux
+Type=idle
+Restart=always
+UtmpIdentifier=%I
+StandardInput=tty
+StandardOutput=tty
+TTYPath=/dev/%I
+TTYReset=yes
+TTYVHangup=yes
+IgnoreSIGPIPE=no
+SendSIGHUP=yes
+
+[Install]
+WantedBy=getty.target

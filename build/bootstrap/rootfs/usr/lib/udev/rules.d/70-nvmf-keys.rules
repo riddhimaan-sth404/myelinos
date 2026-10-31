@@ -1,0 +1,7 @@
+#
+# nvmf-keys.rules:
+#   Load pre-shared keys into the kernel keyring when
+#   the PSK keyring module gets loaded.
+#
+#
+ACTION=="add", SUBSYSTEM=="module", KERNEL=="nvme_tcp", TEST=="/etc/nvme/tls-keys", RUN+="/usr/bin/nvme tls --import --keyfile /etc/nvme/tls-keys"
