@@ -1,0 +1,16 @@
+[package]
+name = "axon-installer-tui"
+version = "0.1.0"
+edition = "2021"
+description = "MyelinOS Ultra-Lightweight TUI Bootstrap Installer (Stage 1)"
+
+[[bin]]
+name = "axon-bootstrap"
+path = "src/main.rs"
+
+[dependencies]
+ratatui = "0.30"
+crossterm = "0.29"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+myelin-types = { path = "../../foundational/myelin-types" }

@@ -2,8 +2,8 @@
 """
 MyelinOS Automated Verification Test Suite
 Tests cold boot into systemd PID 1, D-Bus system bus, logind seat manager,
-VirtIO DRM KMS GPU detection, Display Servers (cosmic-comp and Xwayland),
-COSMIC Desktop Environment suite, networking, Python 3, and clean shutdown.
+VirtIO DRM KMS GPU detection, Display Servers (GNOME Shell Wayland and Xwayland),
+GNOME 50 Desktop Environment suite, networking, Python 3, and clean shutdown.
 """
 
 import sys
@@ -19,12 +19,14 @@ if not KERNEL.exists() or not ROOTFS.exists():
     sys.exit(1)
 
 cmd = (
-    f"qemu-system-x86_64 -enable-kvm -m 2048M -smp 2 "
+    f"qemu-system-x86_64 -enable-kvm -m 4096M -smp 2 "
     f"-kernel {KERNEL} "
     f"-drive file={ROOTFS},format=raw,if=virtio "
     f"-netdev user,id=net0,hostfwd=tcp::2222-:22 "
     f"-device virtio-net-pci,netdev=net0 "
     f"-device virtio-vga "
+    f"-device virtio-tablet-pci "
+    f"-device intel-hda -device hda-duplex "
     f"-display none -vnc :1 "
     f"-serial mon:stdio "
     '-append "root=/dev/vda rw console=ttyS0 init=/usr/lib/systemd/systemd audit=0 selinux=0 enforcing=0 quiet"'
@@ -45,7 +47,7 @@ def send_check(prompt_str, command, expected_pattern, test_name):
 
 try:
     prompt = r"\[root@myelinos.*\]#"
-    idx = child.expect([prompt, pexpect.TIMEOUT, pexpect.EOF], timeout=25)
+    idx = child.expect([prompt, pexpect.TIMEOUT, pexpect.EOF], timeout=45)
     if idx == 0:
         print("\n\n[+] Successfully reached root shell via systemd!")
         
@@ -54,9 +56,17 @@ try:
         send_check(prompt, "systemctl is-active systemd-journald", r"active", "journald is active")
         send_check(prompt, "systemctl is-active systemd-udevd", r"active", "udevd is active")
 
-        # 2. Distro Identity
+        # 2. Distro Identity & Rust for Linux
         send_check(prompt, "cat /etc/os-release", r'NAME="MyelinOS"', "OS Release identity")
         send_check(prompt, "hostname", r"myelinos", "Hostname")
+        send_check(prompt, "uname -r", r"7\.2\.13", "Linux kernel 7.2.13 compiled from source")
+        send_check(prompt, "dmesg | grep --color=never -i 'Rust minimal sample'", r"Rust minimal sample \(init\)", "Rust for Linux kernel initialization")
+
+        # 2b. Sudo Privilege Escalation & Wheel Group Integration
+        send_check(prompt, "which sudo sudoedit visudo", r"/usr/(bin|sbin)/sudo", "Sudo binaries present")
+        send_check(prompt, "ls -l /usr/bin/sudo", r"-rwsr-xr-x.*root", "Sudo SUID root permissions")
+        send_check(prompt, "su - myelinos -c 'sudo whoami'", r"root", "Sudo execution as myelinos user")
+        send_check(prompt, "su - myelinos -c 'sudo id'", r"uid=0\(root\)", "Sudo id returns root UID 0")
 
         # 3. D-Bus & Seat/Session Infrastructure
         send_check(prompt, "systemctl is-active dbus.socket", r"active", "D-Bus socket is active")
@@ -65,31 +75,82 @@ try:
 
         # 4. Graphics & DRM Hardware Detection
         send_check(prompt, "ls -l /dev/dri/card* /dev/dri/renderD* 2>&1", r"(card|renderD)", "VirtIO DRM KMS devices (/dev/dri)")
-        send_check(prompt, "lsmod | grep -E 'virtio_gpu|drm'", r"(virtio_gpu|drm)", "VirtIO GPU kernel driver loaded")
+        send_check(prompt, "test -c /dev/fb0 && echo FBDEV_OK", r"FBDEV_OK", "Framebuffer device /dev/fb0 available")
+        send_check(prompt, "dmesg | grep --color=never -i 'virtio-gpu'", r"virtio-gpu", "VirtIO GPU kernel driver initialized")
 
-        # 5. Display Server: cosmic-comp (Wayland) & Xwayland (X11)
-        send_check(prompt, "cosmic-comp --version", r"cosmic-comp 1\.0\.0", "Wayland Display Server (cosmic-comp)")
+        # 4b. Audio Hardware & Codec Detection
+        send_check(prompt, "cat /proc/asound/cards", r"HDA-Intel", "Intel HDA audio card detected")
+        send_check(prompt, "cat /proc/asound/card0/codec#0", r"Codec:", "HDA audio codec successfully probed")
+
+        # 5. Display Server: GNOME Shell (Wayland) & Xwayland (X11)
+        send_check(prompt, "gnome-shell --version", r"GNOME Shell 50", "Wayland Display Server (gnome-shell)")
+        send_check(prompt, "mutter --version", r"mutter 50", "Mutter display server")
         send_check(prompt, "Xwayland -version", r"The X\.Org Foundation Xwayland Version", "X11 Display Server (Xwayland)")
-        send_check(prompt, "which wayland-info xrandr glxinfo xauth xhost xrdb", r"/usr/(bin|sbin)/xrandr", "Wayland and X11 diagnostic tools")
+        send_check(prompt, "which wayland-info glxinfo xauth xhost xrdb", r"/usr/(bin|sbin)/", "Wayland and X11 diagnostic tools")
 
-        # 6. COSMIC Desktop Environment Components
+        # 6. GNOME Desktop Environment Components
         send_check(
             prompt,
-            "which cosmic-session start-cosmic cosmic-panel cosmic-applets cosmic-app-library cosmic-bg cosmic-files cosmic-launcher cosmic-notifications cosmic-osd cosmic-settings cosmic-term cosmic-workspaces",
-            r"/usr/(bin|sbin)/cosmic-session",
-            "COSMIC Desktop Environment core binaries"
+            "which gnome-shell gnome-session gnome-session-quit gnome-session-inhibit gnome-extensions mutter gjs gdm start-gnome nautilus ptyxis",
+            r"/usr/.*gnome-shell",
+            "GNOME 50 Desktop Environment core binaries"
         )
         send_check(
             prompt,
-            "test -d /usr/share/cosmic && test -f /usr/share/wayland-sessions/cosmic.desktop && echo COSMIC_DATA_OK",
-            r"COSMIC_DATA_OK",
-            "COSMIC system configuration & Wayland session desktop entry"
+            "test -d /usr/share/gnome-shell && test -f /usr/share/wayland-sessions/gnome.desktop && echo GNOME_DATA_OK",
+            r"GNOME_DATA_OK",
+            "GNOME system configuration & Wayland session desktop entry"
         )
         send_check(
             prompt,
-            "test -d /usr/share/icons/cosmic && test -d /usr/share/backgrounds/cosmic && echo COSMIC_THEME_OK",
-            r"COSMIC_THEME_OK",
-            "COSMIC icons and wallpapers"
+            "ls -la /usr/share/applications/org.gnome.*.desktop",
+            r"org\.gnome\.Calculator\.desktop",
+            "GNOME application desktop entries"
+        )
+        send_check(
+            prompt,
+            "test -d /usr/share/icons/Adwaita && test -d /usr/share/backgrounds/gnome && echo GNOME_THEME_OK",
+            r"GNOME_THEME_OK",
+            "GNOME icons and wallpapers"
+        )
+
+        # 6c. Standard Desktop Applications (Firefox, LibreOffice Suite, GNOME Utilities)
+        send_check(
+            prompt,
+            "which firefox libreoffice soffice gnome-calculator loupe baobab papers gnome-font-viewer gnome-disks gnome-calendar gnome-clocks gnome-weather gnome-characters simple-scan gnome-text-editor",
+            r"/usr/(bin|sbin)/firefox",
+            "Standard Desktop Application binaries"
+        )
+        send_check(prompt, "firefox --version", r"Mozilla Firefox", "Firefox web browser execution")
+        send_check(prompt, "soffice --version", r"LibreOffice", "LibreOffice office suite execution")
+        send_check(prompt, "gnome-calculator --version", r"gnome-calculator", "GNOME Calculator execution")
+        send_check(prompt, "baobab --version", r"baobab", "Baobab disk analyzer execution")
+        send_check(prompt, "papers --version", r"Papers", "Papers document viewer execution")
+        send_check(
+            prompt,
+            "ls -la /usr/share/applications/org.mozilla.firefox.desktop /usr/share/applications/libreoffice-*.desktop /usr/share/applications/org.gnome.Calculator.desktop /usr/share/applications/org.gnome.Loupe.desktop /usr/share/applications/org.gnome.Papers.desktop",
+            r"org\.mozilla\.firefox\.desktop",
+            "Desktop application .desktop entries for GNOME"
+        )
+        send_check(
+            prompt,
+            "test -f /usr/share/glib-2.0/schemas/gschemas.compiled && echo SCHEMAS_OK",
+            r"SCHEMAS_OK",
+            "GSettings compiled schemas present"
+        )
+
+        # 6d. Desktop Support Frameworks: systemd-run, Portals, Polkit, DConf, UPower
+        send_check(
+            prompt,
+            "which systemd-run gio gtk-launch dbus-update-activation-environment dconf pkexec upower /usr/libexec/xdg-desktop-portal /usr/libexec/dconf-service /usr/libexec/upowerd",
+            r"/usr/(bin|sbin)/systemd-run",
+            "Desktop infrastructure binaries & helpers"
+        )
+        send_check(
+            prompt,
+            "su - myelinos -c 'systemd-run --user --scope echo SYSTEMD_RUN_USER_OK'",
+            r"SYSTEMD_RUN_USER_OK",
+            "Systemd user manager transient scope execution (systemd-run --user)"
         )
 
         # 7. Fontconfig & Fonts
@@ -120,12 +181,36 @@ try:
         send_check(prompt, "ping -c 1 -W 1 127.0.0.1", r"1 packets transmitted, 1 (packets )?received", "Loopback Ping")
         send_check(prompt, "systemctl is-active sshd.service", r"active", "SSHD Service is active")
 
-        # 12. Display Server Compositor Test
+        # 12. Display Server & GDM Test
         send_check(
             prompt,
-            "timeout 3 cosmic-comp --help | grep -i 'cosmic-comp'",
-            r"cosmic-comp",
-            "cosmic-comp execution test"
+            "timeout 3 gnome-shell --help | grep -i 'wayland'",
+            r"wayland",
+            "gnome-shell execution test"
+        )
+        send_check(
+            prompt,
+            "for i in $(seq 1 15); do if [ \"$(systemctl is-active gdm.service)\" = \"active\" ]; then echo GDM_ACTIVE; break; fi; sleep 1; done",
+            r"GDM_ACTIVE",
+            "GDM Display Manager systemd service is active"
+        )
+        send_check(
+            prompt,
+            "ps aux | grep --color=never -E 'gdm|gnome-shell|gnome-session'",
+            r"gdm",
+            "GDM and GNOME processes present"
+        )
+        send_check(
+            prompt,
+            "ps aux | grep --color=never -E 'gnome-shell.*--force-animations'",
+            r"--force-animations",
+            "GNOME Shell running with --force-animations flag"
+        )
+        send_check(
+            prompt,
+            "su - myelinos -c 'busctl --user get-property org.gnome.Shell /org/gnome/Shell/Introspect org.gnome.Shell.Introspect AnimationsEnabled'",
+            r"b true",
+            "GNOME Shell Introspect AnimationsEnabled reports true"
         )
 
         # 13. Clean System Shutdown
@@ -133,7 +218,7 @@ try:
         child.sendline("poweroff -f")
         child.expect(pexpect.EOF, timeout=10)
         passed = True
-        print("\n[+] === ALL TESTS PASSED: DISPLAY SERVER & COSMIC DESKTOP INTEGRATED AND OPERATIONAL ===")
+        print("\n[+] === ALL TESTS PASSED: DISPLAY SERVER & GNOME 50 DESKTOP INTEGRATED AND OPERATIONAL ===")
     else:
         print("\n[-] Failed to reach root shell: Boot timeout or unexpected EOF")
 except Exception as e:

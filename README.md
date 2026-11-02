@@ -1,8 +1,8 @@
-# MyelinOS — Linux Distribution (LFS + systemd + Display Server + COSMIC Desktop)
+# MyelinOS — Linux Distribution (LFS + systemd + GNOME 50 Desktop + Rust for Linux)
 
-A complete, bootable Linux distribution bootstrapped following the **Linux From Scratch (LFS) systemd** standard, featuring a **modern Display Server architecture** and the **System76 COSMIC Desktop Environment**.
+A complete, bootable Linux distribution bootstrapped following the **Linux From Scratch (LFS) systemd** standard, featuring a **modern Wayland Display Server architecture**, **GNOME 50 Desktop Environment**, and **Linux Kernel 7.2.13 compiled from source with Rust for Linux enabled**.
 
-MyelinOS combines the reliability and transparency of an LFS system with `systemd` v259 as PID 1, the Wayland compositor `cosmic-comp`, X11 compatibility via `Xwayland`, Mesa DRM/KMS VirtIO graphics acceleration, D-Bus session and system message bus, and the full COSMIC Desktop suite.
+MyelinOS combines the reliability and transparency of an LFS system with `systemd` v259 as PID 1, GNOME Shell 50 compositor and Mutter display server, X11 compatibility via `Xwayland`, Mesa DRM/KMS VirtIO graphics acceleration, D-Bus session and system message bus, PipeWire/WirePlumber audio stack, and a complete suite of standard desktop applications (Firefox, LibreOffice, Ptyxis terminal, Nautilus file manager, GNOME Calculator, GNOME Text Editor, Loupe, Papers, and GNOME System Monitor).
 
 ---
 
@@ -12,30 +12,40 @@ MyelinOS combines the reliability and transparency of an LFS system with `system
 +--------------------------------------------------------------------------+
 |                        MyelinOS Desktop System                           |
 +--------------------------------------------------------------------------+
-|  Applications & Tools:                                                   |
-|    * COSMIC Terminal (cosmic-term), COSMIC Files (cosmic-files)          |
-|    * COSMIC App Library, Launcher, Settings, Applets, Workspaces        |
-|    * Python 3.14 Runtime & Full Standard Library                         |
-|    * Full GNU Coreutils, Procps-ng, Util-Linux, OpenSSH, Nano, Vi        |
+|  Applications & Office Suite:                                            |
+|    * Web Browser:            Mozilla Firefox                             |
+|    * Productivity:           LibreOffice Suite (Writer, Calc, Draw, etc) |
+|    * Terminal Emulator:      Ptyxis 50 (GTK 4 / VTE / container-ready)   |
+|    * File Manager:           Nautilus 50 (TinySPARQL / LocalSearch)      |
+|    * Utilities:              GNOME Calculator, Text Editor, Loupe, Papers|
+|    * System Monitor:         GNOME System Monitor, Baobab Disk Usage     |
+|    * Python Runtime:         Python 3.14 Runtime & Full Standard Library |
+|    * GNU Core:               Full Coreutils, Procps-ng, Util-Linux, Sudo |
 +--------------------------------------------------------------------------+
-|  Display Server & Compositor Layer:                                      |
-|    * Wayland Display Server: cosmic-comp (Smithay / wgpu / Rust)         |
+|  Display Server & Desktop Layer:                                         |
+|    * Wayland Compositor:     GNOME Shell 50.6 (native Wayland compositor)|
+|    * Display Server Core:    Mutter 50.6 (DRM/KMS scanout, GBM, GL)      |
 |    * X11 Display Server:     Xwayland (seamless X11 compatibility)       |
-|    * Session Manager:        start-cosmic / cosmic-session               |
-|    * Diagnostics:            wayland-info, xrandr, glxinfo, xauth, xrdb  |
+|    * Portals & Session:      XDG Desktop Portal (GNOME & GTK backends)   |
+|    * Login & Display:        GDM 50 (GNOME Display Manager) / start-gnome|
++--------------------------------------------------------------------------+
+|  Audio & Multimedia Stack:                                               |
+|    * Sound Server:           PipeWire 1.4 & PipeWire-Pulse               |
+|    * Session Manager:        WirePlumber 0.5 (ALSA, SPA plugins)         |
+|    * Real-time Scheduling:   RealtimeKit (rtkit-daemon)                  |
 +--------------------------------------------------------------------------+
 |  Graphics & Acceleration Stack:                                          |
-|    * Mesa 26.2 (Gallium, GBM, EGL, GL, GLESv2)                           |
-|    * DRI Drivers: virtio_gpu_dri.so, kms_swrast_dri.so, swrast_dri.so    |
-|    * Vulkan ICDs: virtio_icd (virtio-gpu) & lvp_icd (CPU lavapipe)       |
-|    * Input & Seat: libseat, libinput, libxkbcommon, xkeyboard-config     |
+|    * Mesa 26.2:              Gallium, GBM, EGL, GL, GLESv2, Vulkan       |
+|    * DRI Drivers:            virtio_gpu_dri.so, swrast_dri.so            |
+|    * Input & Seat:           libseat, libinput, libxkbcommon, xkeyboard |
 +--------------------------------------------------------------------------+
 |  System & Service Infrastructure:                                        |
-|    * Init System: systemd v259 (PID 1, multi-user / graphical targets)  |
-|    * Message Bus: D-Bus (dbus-daemon.service, dbus.socket)               |
-|    * Seat / Session: systemd-logind.service, pam_systemd.so              |
-|    * Networking: systemd-networkd (DHCP), systemd-resolved, OpenSSH      |
-|    * Kernel: Linux 7.2.11 with virtio-gpu, virtio-net, virtio-blk        |
+|    * Kernel:                 Linux 7.2.13 compiled with Rust for Linux   |
+|    * Init System:            systemd v259 (PID 1, graphical.target)      |
+|    * Message Bus:            D-Bus (dbus-daemon.service, dbus.socket)    |
+|    * Privilege Escalation:   Sudo (wheel group NOPASSWD) & PolicyKit 1   |
+|    * Networking:             systemd-networkd (DHCP), systemd-resolved   |
+|    * Target Image Formats:   UEFI GPT Disk, Hybrid Live ISO, Ext4 Rootfs |
 +--------------------------------------------------------------------------+
 ```
 
@@ -43,112 +53,95 @@ MyelinOS combines the reliability and transparency of an LFS system with `system
 
 ## Included Subsystems & Command Coverage
 
-### 1. Display Server & Graphics
-- **Wayland Compositor / Display Server**: `cosmic-comp` (v1.0.0, built on Smithay). Supports direct DRM/KMS scanout, GBM allocation, software fallbacks, and multi-output management.
-- **X11 Display Server**: `Xwayland` (v24.1.14), managed transparently by `cosmic-comp` on `DISPLAY=:0`.
-- **Display & Graphics Diagnostics**:
-  - `wayland-info`: Inspects active Wayland protocols and compositor interfaces.
-  - `xrandr`: Manages screen resolutions, refresh rates, and virtual outputs.
-  - `glxinfo`: Queries OpenGL / GLX context, renderer, and visual properties.
-  - `xauth`, `xhost`, `xrdb`: Manages X11 authentication, access control, and resources.
-- **Mesa & DRM Stack**:
-  - DRI drivers: `virtio_gpu_dri.so`, `kms_swrast_dri.so`, `swrast_dri.so`, `libdril_dri.so`.
-  - Vulkan drivers: `libvulkan_virtio.so` (VirtIO GPU) and `libvulkan_lvp.so` (CPU Lavapipe).
-  - Acceleration libraries: `libgallium`, `libgbm`, `libEGL`, `libGL`, `libGLESv2`, `libdrm`.
-  - Seat & Input: `libseat`, `libinput`, `libxkbcommon`, `libevdev`, `libwacom`.
-  - Keyboard definitions: `/usr/share/X11/xkb` (via `xkeyboard-config-2`).
+### 1. Kernel & Rust for Linux
+- **Kernel Version**: Linux `7.2.13` compiled directly from source.
+- **Rust for Linux**: Enabled with `CONFIG_RUST=y`, initialization of kernel Rust modules (`rust_minimal` sample verified in dmesg).
+- **Core Drivers**: Built-in support for `virtio-gpu`, `virtio-net`, `virtio-blk`, `virtio-scsi`, `overlayfs`, `squashfs`, `ext4`, `vfat`, and `snd_hda_intel`.
 
-### 2. COSMIC Desktop Environment Suite
-- **Session Orchestration**:
-  - `start-cosmic`: High-level session initialization script setting up XDG environment, D-Bus session bus, and launch flags.
-  - `cosmic-session`: Desktop lifecycle manager coordinating compositor, background daemons, and client applications.
-- **Core Desktop Components**:
-  - `cosmic-panel`: Top/bottom panel and dock.
-  - `cosmic-applets`: Status applets (workspaces, clock, audio, network, notifications, battery, power, tiling).
-  - `cosmic-app-library`: Full-screen categorized application grid.
-  - `cosmic-launcher`: Fast application, command, and calculation launcher.
-  - `cosmic-workspaces`: Workspace overview and window switcher.
-  - `cosmic-bg`: Wallpaper and background renderer.
-  - `cosmic-notifications`: Desktop notification daemon.
-  - `cosmic-osd`: On-screen display for volume and display brightness.
-  - `cosmic-idle`: User idle state notification manager.
-  - `cosmic-randr`: Display configuration utility.
-  - `cosmic-screenshot`: Screen capture utility.
-- **COSMIC Applications**:
-  - `cosmic-term`: High-performance terminal emulator built with Alacritty and Libcosmic.
-  - `cosmic-files`: Libcosmic file manager with thumbnailer daemon.
-  - `cosmic-settings` & `cosmic-settings-daemon`: System and appearance configuration.
-- **Desktop Assets & Theming**:
-  - Default shortcut and window tiling configs in `/usr/share/cosmic/`.
-  - Official COSMIC icon theme in `/usr/share/icons/cosmic/`.
-  - COSMIC official wallpapers in `/usr/share/backgrounds/cosmic/`.
-  - Wayland desktop session definition in `/usr/share/wayland-sessions/cosmic.desktop`.
-  - Application desktop entries in `/usr/share/applications/`.
+### 2. Display Server & GNOME 50 Desktop Environment
+- **Compositor & Shell**: GNOME Shell `50.6` running natively on Wayland.
+- **Display Server Core**: Mutter `50.6` managing KMS page flips, GBM buffers, software GL fallback, and X11 frame clients.
+- **X11 Compatibility**: `Xwayland` managed seamlessly with frame client support (`/usr/libexec/mutter-x11-frames`).
+- **Standard Desktop Applications**:
+  - **Firefox**: Mozilla Firefox web browser.
+  - **LibreOffice Suite**: Complete office productivity suite (`soffice`, `oowriter`, `oocalc`, etc.).
+  - **Ptyxis**: Modern GTK 4 terminal emulator (`/usr/bin/ptyxis`).
+  - **Nautilus**: GNOME file manager with TinySPARQL and LocalSearch indexing.
+  - **GNOME Calculator**: Mathematical and scientific calculation tool.
+  - **GNOME Text Editor**: Modern GNOME editor.
+  - **Loupe**: High-performance image viewer.
+  - **Papers**: Modern document and PDF viewer.
+  - **GNOME System Monitor**: Interactive process and resource inspection tool.
 
-### 3. Init System & Process Management (systemd)
-- **PID 1**: `systemd` v259 running in system mode, achieving targets in ~1.5s cold boot.
-- **Active System Services**:
-  - `systemd-journald` (logging & journal management)
-  - `systemd-udevd` (kernel device events, DRM nodes, input devices)
-  - `dbus.service` & `dbus.socket` (D-Bus system message bus)
-  - `systemd-logind` (user session, seat, and VT manager)
-  - `systemd-networkd` (DHCP network interface configuration)
-  - `systemd-resolved` (DNS resolution & caching)
-  - `systemd-timesyncd` (NTP clock synchronization)
-  - `sshd.service` (OpenSSH server daemon)
-  - `serial-getty@ttyS0.service` (instant auto-login console on `/dev/ttyS0`)
-  - `cosmic.service` (COSMIC Desktop service on VT1)
-- **Control Tools**:
-  `systemctl`, `journalctl`, `udevadm`, `loginctl`, `timedatectl`, `localectl`, `hostnamectl`, `bootctl`, `busctl`, `resolvectl`, `networkctl`, `poweroff`, `reboot`.
+### 3. Privilege Escalation & Security
+- **Sudo**: `/usr/bin/sudo` with SUID root permissions (`4755`), configured with `/etc/sudoers.d/10-wheel` granting full passwordless administration privileges to the `wheel` group.
+- **PolicyKit**: `polkitd` daemon and `/usr/lib/polkit-1/polkit-agent-helper-1` with universal rule allowing `root`, `myelinos`, `wheel`, and `gdm`.
+- **Default User**: `myelinos` (UID 1000, GID 1000) added to `wheel`, `video`, `audio`, `render`, `input`, and `seat` groups.
 
-### 4. D-Bus & Seat Management
-- **D-Bus System Bus**: `dbus-daemon --system` listening on `/run/dbus/system_bus_socket`.
-- **D-Bus Session Bus**: `dbus-run-session` automatically provisioned per graphical session.
-- **CLI Tools**: `dbus-send`, `dbus-monitor`, `busctl`.
-- **Logind Integration**: `systemd-logind` managing graphical seats (`seat0`), VT switching, and DRM master delegation.
-- **Users**: System user `dbus` (UID 81) and standard desktop user `cosmic` (UID 1000).
+### 4. Audio & Multimedia Infrastructure
+- **PipeWire & WirePlumber**: User-level sound management running under systemd user manager (`pipewire.service`, `pipewire-pulse.service`, `wireplumber.service`).
+- **RealtimeKit**: `rtkit-daemon` providing real-time CPU scheduling priorities to audio and compositor threads.
 
-### 5. Standard CLI & Development Environment
-- **Shells**: `bash` (with custom `/etc/profile` and `/root/.bashrc`), `sh`.
-- **Full GNU Coreutils**: Complete suite of 100+ utilities (`cat`, `cp`, `mv`, `rm`, `mkdir`, `touch`, `chmod`, `chown`, `dd`, `stat`, `truncate`, `grep`, `sed`, `awk`, `find`, `xargs`, `sort`, `uniq`, `wc`, `diff`, `patch`, `sha256sum`, etc.).
-- **Process Monitoring**: `ps`, `top`, `free`, `vmstat`, `pkill`, `pgrep`, `pidof`, `kill`, `watch`.
-- **Storage & Disk Administration**: `mount`, `umount`, `findmnt`, `lsblk`, `blkid`, `fdisk`, `cfdisk`, `mke2fs`, `mkfs.ext4`, `e2fsck`, `tune2fs`, `resize2fs`.
-- **Archiving & Compression**: `tar`, `gzip`, `bzip2`, `xz`, `zstd`.
-- **Editors & Pagers**: `nano` (syntax highlighting in `/usr/share/nano`), `vi` (with `/usr/share/vim`), `less`, `more`.
-- **Fonts & Fontconfig**: Complete `/etc/fonts/fonts.conf` database, `fc-cache`, `fc-list`, and system fonts (Noto, Liberation, DejaVu).
-- **Networking**: `ip` (`iproute2`), `ss`, `ping`, `curl`, `wget`, OpenSSH suite (`ssh`, `sshd`, `scp`, `sftp`).
-- **Python 3 Runtime**: Python 3.14 with complete standard library in `/usr/lib64/python3.14`.
+### 5. Two-Stage Bootstrap Installer & Presets Architecture
+1. **Stage 1: Ultra-Lightweight TUI Bootstrap Installer (`axon-installer-tui`)**:
+   - Packaged in `build/images/myelinos-bootstrap.iso` (~73 MB).
+   - Interactive terminal UI built with Rust and Ratatui.
+   - Partitions target disk into UEFI GPT: 512 MB ESP (FAT32) and native Btrfs root (`MYELINOS_ROOT`).
+   - Copies minimal base system and installs standalone UEFI GRUB 2 bootloader with built-in Btrfs drivers.
+2. **Stage 2: Personalization & Software Presets Wizard (`myelin-installer-gui`)**:
+   - Modern GTK 4 / Libadwaita application that launches on first boot of target disk.
+   - Provides account creation, hostname configuration, and timezone localization.
+   - Offers **11 specialized package presets**: Developer Workstation, Full-Stack & Web Dev, Data Science & AI/ML, DevOps & Cloud, Office & Productivity, Creative Studio, Gaming & Entertainment, Cybersecurity & Audit, Pro Audio, STEM & Education, Minimal Server & Hardened Workstation.
+   - Seals system state into Axon CAS Generation 1 (`/var/lib/myelin/generations/gen-1.json`).
+   - Permanently deletes autostart entries and configures GDM for the newly created user—the installer never reappears on reboot.
+
+### 6. Multi-Target Boot Artifacts
+1. **Bootstrap Installer ISO (`build/images/myelinos-bootstrap.iso`)**:
+   - ~73 MB lightweight hybrid ISO (UEFI + BIOS).
+2. **Target Disk Image (`build/images/target-disk.raw`)**:
+   - 20 GB GPT virtual disk with Btrfs root and UEFI ESP partition.
+3. **UEFI GPT Disk Image (`build/images/myelinos-uefi.img`)**:
+   - GPT partition layout: ESP (64 MB, FAT32) + Root Filesystem (ext4, ~5.5 GB).
+4. **Hybrid Live ISO Image (`build/images/myelinos-live.iso`)**:
+   - High-compression zstd SquashFS root filesystem with OverlayFS.
 
 ---
 
-## Quick Start & Verification
+## Quick Start & Build Instructions
 
 ### Prerequisites
-- Linux host with QEMU (`qemu-system-x86_64`) and `podman` installed.
-- KVM acceleration enabled (`/dev/kvm`).
+- Linux host system with `cargo`, `podman`, `qemu-system-x86_64`, `ovmf`, `mksquashfs`, `xorriso`, and `grub2-mkimage`.
 
-### Build the Image
+### Build Installer and System Images
 ```bash
-make build
-# or: python3 build/bootstrap/bootstrap.py
-```
-This downloads packages (if not cached), extracts the rootfs, resolves all shared libraries, configures systemd, and formats the bootable 3.5 GB ext4 image (`build/images/myelinos-rootfs.ext4`).
+# 1. Build Stage 1 Bootstrap Installer ISO (~73 MB)
+make installer-iso
+# or: python3 tools/build_bootstrap_iso.py
 
-### Run the Automated Test Suite
-```bash
-make test
-# or: python3 tools/test_boot.py
-```
-Validates cold boot, PID 1 systemd, D-Bus, logind, DRM virtio-gpu detection, `cosmic-comp`, `Xwayland`, COSMIC binaries, Python 3 runtime, network ping, SSH server, and ACPI shutdown.
+# 2. Build Hybrid Live ISO
+make iso
 
-### Run Interactive Session
-```bash
-make run
-# or: ./tools/run_qemu.sh --interactive
+# 3. Build UEFI GPT Disk Image
+make uefi
 ```
-- **Serial Console**: Automatic root shell on terminal stdio.
-- **COSMIC Desktop Display**: Rendered via VirtIO GPU on VNC display `localhost:5901` (`:1`). Connect using any VNC viewer (e.g. `vncviewer localhost:5901`).
-- **SSH Access**: Forwarded to host port 2222 (`ssh -p 2222 root@localhost`).
+
+### Running the Systems in QEMU
+```bash
+# Launch Stage 1 Bootstrap Installer (4 GB RAM, dual display VGA/GTK + TUI stdio)
+./run_installer.sh
+
+# Launch Stage 1 automated non-interactive install
+./run_installer.sh --auto --headless --reset-disk
+
+# Launch installed MyelinOS system from target disk
+./run_system.sh -t
+
+# Launch installed MyelinOS system with graphical window
+./run_system.sh -t -g
+```
+- **Serial Console**: Automatic root login attached directly to standard input/output.
+- **GNOME 50 Graphical Desktop**: Rendered via VirtIO GPU on VNC display `localhost:5901` (`:1`).
+- **SSH Access**: Forwarded to host port 2222 (`ssh -p 2222 myelinos@localhost`).
 
 ---
 
@@ -161,13 +154,22 @@ MyelinOS/
 │   │   ├── bootstrap.py            # Complete rootfs generator and image builder
 │   │   └── rootfs/                 # Staged rootfs directory
 │   ├── images/
-│   │   ├── myelinos-rootfs.ext4    # 3.5GB sparse bootable ext4 disk image
-│   │   └── vmlinuz                 # Linux 7.2 x86_64 kernel binary
+│   │   ├── myelinos-rootfs.ext4    # 5.5GB sparse bootable ext4 disk image
+│   │   ├── myelinos-uefi.img       # UEFI GPT bootable disk image
+│   │   ├── myelinos-live.iso       # Hybrid Live ISO with SquashFS & OverlayFS
+│   │   └── vmlinuz                 # Linux 7.2.13 kernel with Rust for Linux
 │   └── packages/
-│       └── cosmic/                 # Cached COSMIC RPM packages
+│       ├── desktop_apps/           # Cached desktop application RPMs
+│       ├── sudo/                   # Cached sudo RPMs
+│       └── polkit/                 # Cached polkit RPMs
 ├── tools/
-│   ├── run_qemu.sh                 # QEMU launcher (serial console + VNC GPU)
-│   └── test_boot.py                # Automated end-to-end verification suite
-├── Makefile                        # Top-level build, run, test targets
-└── README.md                       # Distribution documentation
+│   ├── build_uefi_disk.py          # UEFI GPT disk builder
+│   ├── build_iso.py                # Hybrid Live ISO builder
+│   ├── run_qemu.sh                 # Unified QEMU launcher
+│   ├── test_boot.py                # Automated direct ext4 boot test suite
+│   ├── test_uefi_boot.py           # Automated UEFI GPT test suite
+│   ├── test_iso_boot.py            # Automated Live ISO test suite
+│   └── system_audit.py             # In-depth systemd & compositor audit
+├── Makefile                        # Top-level build, test, and run automation
+└── README.md                       # Comprehensive documentation
 ```

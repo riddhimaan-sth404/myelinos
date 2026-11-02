@@ -1,0 +1,18 @@
+[package]
+name = "axon"
+version = "0.1.0"
+edition = "2021"
+description = "Axon — Canonical Package and Generation Manager for MyelinOS"
+
+[[bin]]
+name = "axon"
+path = "src/main.rs"
+
+[dependencies]
+myelin-types = { path = "../../crates/foundational/myelin-types" }
+myelin-artifact = { path = "../../crates/platform/myelin-artifact" }
+myelin-generation = { path = "../../crates/platform/myelin-generation" }
+myelin-package = { path = "../../crates/platform/myelin-package" }
+clap = { version = "4.4", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"

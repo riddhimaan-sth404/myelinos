@@ -1,7 +1,44 @@
-build/images/
-build/bootstrap/rootfs/
-build/bootstrap/cosmic_staging/
-build/bootstrap/__pycache__/
-build/iso_staging/
-build/packages/
-*.pyc
+# Rust / Cargo build artifacts
+/target/
+**/*.rs.bk
+
+# Large build outputs & rootfs staging
+/build/images/*
+!/build/images/vmlinuz
+/build/bootstrap/rootfs/
+/build/bootstrap/cosmic_staging/
+/build/bootstrap_iso_staging/
+/build/iso_staging/
+/build/kernel_build/
+/build/packages/
+
+# Virtual disk images & bootable ISOs
+*.raw
+*.iso
+*.ext4
+*.img
+*.qcow2
+*.vdi
+*.vmdk
+
+# Python bytecode & environments
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+venv/
+env/
+
+# Test sockets, frame dumps & logs
+*.sock
+*.ppm
+*.log
+
+# Editor & OS temporary files
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+*~

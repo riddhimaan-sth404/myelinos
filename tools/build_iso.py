@@ -2,7 +2,7 @@
 """
 MyelinOS Live ISO Generator
 Builds a bootable hybrid (BIOS + UEFI) Live ISO containing:
-- Compressed SquashFS root filesystem with COSMIC Desktop Environment & systemd
+- Compressed SquashFS root filesystem with GNOME 50 Desktop Environment & systemd
 - Live boot initramfs with overlayfs tmpfs copy-on-write layer
 - Linux kernel 7.2.11-200.fc44.x86_64
 - GRUB 2 bootloader with auto-boot configuration
@@ -38,7 +38,7 @@ mkdir -p /dev/pts
 mount -t devpts devpts /dev/pts
 
 echo "=========================================================="
-echo "    MyelinOS Live Linux (LFS + systemd + COSMIC)          "
+echo "    MyelinOS Live Linux (LFS + systemd + GNOME 50)        "
 echo "=========================================================="
 
 # 2. Insert kernel modules
@@ -99,7 +99,7 @@ mount -t squashfs -o ro,loop /run/live/medium/LiveOS/squashfs.img /run/live/squa
 # 5. Initializing OverlayFS with tmpfs
 echo "[*] Initializing OverlayFS with tmpfs writable layer..."
 mkdir -p /run/live/overlay
-mount -t tmpfs -o mode=0755,size=1024M tmpfs /run/live/overlay
+mount -t tmpfs -o mode=0755,size=2048M tmpfs /run/live/overlay
 mkdir -p /run/live/overlay/upper /run/live/overlay/work
 mkdir -p /sysroot
 mount -t overlay overlay -o lowerdir=/run/live/squashfs,upperdir=/run/live/overlay/upper,workdir=/run/live/overlay/work /sysroot
@@ -126,7 +126,7 @@ GRUB_CFG = """# MyelinOS Live GRUB Configuration
 set default="0"
 set timeout=3
 
-menuentry "MyelinOS Live (COSMIC Desktop & systemd)" {
+menuentry "MyelinOS Live (GNOME 50 Desktop & systemd)" {
     linux /boot/vmlinuz root=live:LABEL=MYELINOS_LIVE rd.live.image quiet console=ttyS0 console=tty1 audit=0 selinux=0 enforcing=0
     initrd /boot/initrd.img
 }
@@ -171,7 +171,7 @@ def build_squashfs(force: bool = False):
     if squashfs_img.exists():
         squashfs_img.unlink()
 
-    cmd = f"podman unshare mksquashfs {ROOTFS_DIR} {squashfs_img} -comp zstd -processors 2"
+    cmd = f"podman unshare mksquashfs {ROOTFS_DIR} {squashfs_img} -comp zstd -no-xattrs -processors 2"
     subprocess.check_call(cmd, shell=True)
     size_mb = squashfs_img.stat().st_size / (1024 * 1024)
     print(f"[+] SquashFS image generated: {squashfs_img} ({size_mb:.1f} MB)")
@@ -207,23 +207,8 @@ def build_initramfs():
             (init_root / "bin" / app).symlink_to("busybox")
             (init_root / "sbin" / app).symlink_to("../bin/busybox")
 
-        # Decompress and install kernel modules
-        modules = {
-            "isofs": "kernel/fs/isofs/isofs.ko.xz",
-            "squashfs": "kernel/fs/squashfs/squashfs.ko.xz",
-            "overlay": "kernel/fs/overlayfs/overlay.ko.xz",
-            "loop": "kernel/drivers/block/loop.ko.xz",
-            "virtio_scsi": "kernel/drivers/scsi/virtio_scsi.ko.xz",
-        }
-        for name, rel_path in modules.items():
-            mod_file = MODULES_DIR / rel_path
-            if mod_file.exists():
-                decompressed = lzma.decompress(mod_file.read_bytes())
-                out_mod = init_root / "lib" / "modules" / f"{name}.ko"
-                out_mod.write_bytes(decompressed)
-                out_mod.chmod(0o644)
-            else:
-                print(f"[!] Warning: Kernel module {mod_file} not found")
+        # Essential storage, ISO9660, SquashFS, and OverlayFS drivers are built directly into the 7.2.13 kernel.
+        print("[+] Storage and filesystem drivers are built-in to the kernel (no extra initramfs modules required).")
 
         # Write /init
         init_file = init_root / "init"

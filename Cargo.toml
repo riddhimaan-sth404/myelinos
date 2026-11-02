@@ -1,0 +1,10 @@
+[workspace]
+members = [
+    "crates/foundational/myelin-types",
+    "crates/platform/myelin-artifact",
+    "crates/platform/myelin-generation",
+    "crates/platform/myelin-package",
+    "crates/installer/axon-installer-tui",
+    "cli/axon",
+]
+resolver = "2"

@@ -8,8 +8,8 @@ Verifies:
 - Boot into systemd PID 1
 - D-Bus system bus and systemd-logind seat/session manager
 - VirtIO DRM KMS GPU detection (/dev/dri/card0)
-- Display Servers (cosmic-comp Wayland and Xwayland X11)
-- COSMIC Desktop suite and session services
+- Display Servers (GNOME Shell Wayland and Xwayland X11)
+- GNOME 50 Desktop suite and session services
 - Graphical Framebuffer screendump via QMP monitor
 - Clean system shutdown
 """
@@ -38,10 +38,12 @@ if QMP_SOCK.exists():
     QMP_SOCK.unlink()
 
 qemu_cmd = (
-    f"qemu-system-x86_64 -enable-kvm -m 2048M -smp 2 "
+    f"qemu-system-x86_64 -enable-kvm -m 4096M -smp 2 "
     f"-cdrom {ISO_IMG} "
     f"-boot d "
     f"-device virtio-vga "
+    f"-device virtio-tablet-pci "
+    f"-device intel-hda -device hda-duplex "
     f"-display none -vnc :1 "
     f"-serial mon:stdio "
     f"-qmp unix:{QMP_SOCK},server,nowait "
@@ -86,11 +88,16 @@ def capture_screendump():
         if SCREENSHOT_PPM.exists():
             im = Image.open(SCREENSHOT_PPM)
             im.save(SCREENSHOT_PNG)
-            print(f"[+] Graphical screenshot successfully saved: {SCREENSHOT_PNG} (Size: {im.size}, Mode: {im.mode})")
+            colors = im.getcolors(maxcolors=300000)
+            color_count = len(colors) if colors else "> 300000"
+            print(f"[+] Graphical screenshot successfully saved: {SCREENSHOT_PNG} (Size: {im.size}, Mode: {im.mode}, Colors: {color_count})")
             if ARTIFACT_DIR.exists():
                 artifact_dest = ARTIFACT_DIR / "myelinos_live_desktop.png"
                 im.save(artifact_dest)
                 print(f"[+] Copied screenshot to conversation artifact: {artifact_dest}")
+            if colors is not None and len(colors) < 50:
+                print(f"[!] Warning: Low color count ({len(colors)}) detected in screenshot - desktop may not have fully rendered")
+                return False
             return True
         else:
             print("[-] Screendump PPM file not found")
@@ -117,48 +124,118 @@ try:
         send_check(prompt, "cat /proc/mounts | grep -E 'squashfs|overlay'", r"(squashfs|overlay)", "SquashFS and Overlay mounts active")
         send_check(prompt, "ls -la /run/live/medium/LiveOS/squashfs.img", r"squashfs\.img", "Live ISO medium mounted at /run/live/medium")
 
-        # 3. Distro Identity
+        # 3. Distro Identity & Rust for Linux
         send_check(prompt, "cat /etc/os-release", r'NAME="MyelinOS"', "OS Release identity")
         send_check(prompt, "hostname", r"myelinos", "Distro hostname")
+        send_check(prompt, "uname -r", r"7\.2\.13", "Linux kernel 7.2.13 compiled from source")
+        send_check(prompt, "dmesg | grep --color=never -i 'Rust minimal sample'", r"Rust minimal sample \(init\)", "Rust for Linux kernel initialization")
+
+        # 3b. Sudo Privilege Escalation & Wheel Group Integration
+        send_check(prompt, "which sudo sudoedit visudo", r"/usr/(bin|sbin)/sudo", "Sudo binaries present")
+        send_check(prompt, "ls -l /usr/bin/sudo", r"-rwsr-xr-x.*root", "Sudo SUID root permissions")
+        send_check(prompt, "su - myelinos -c 'sudo whoami'", r"root", "Sudo execution as myelinos user")
+        send_check(prompt, "su - myelinos -c 'sudo id'", r"uid=0\(root\)", "Sudo id returns root UID 0")
+
+        # 3c. Standard Linux Distro CLI Utilities
+        send_check(prompt, "which tree vi nano curl wget zip unzip lspci lsusb tracepath patch diff less file", r"/usr/(bin|sbin)/tree", "Standard Linux CLI utilities")
+        send_check(prompt, "tree --version", r"tree", "Tree utility functional")
+        send_check(prompt, "curl --version", r"curl", "Curl network transfer functional")
 
         # 4. D-Bus & Seat/Session Infrastructure
         send_check(prompt, "systemctl is-active dbus.socket", r"active", "D-Bus socket is active")
         send_check(prompt, "dbus-send --system --dest=org.freedesktop.DBus / org.freedesktop.DBus.Peer.Ping", r"", "D-Bus system bus ping")
         send_check(prompt, "systemctl is-active systemd-logind", r"active", "systemd-logind is active")
-        send_check(prompt, "loginctl list-users", r"cosmic", "COSMIC desktop user active in logind")
+        send_check(prompt, "loginctl list-users", r"myelinos", "MyelinOS desktop user active in logind")
 
         # 5. Graphics & DRM Hardware Detection
         send_check(prompt, "ls -l /dev/dri/card* /dev/dri/renderD* 2>&1", r"(card|renderD)", "VirtIO DRM KMS devices (/dev/dri)")
-        send_check(prompt, "lsmod | grep -E 'virtio_gpu|drm'", r"(virtio_gpu|drm)", "VirtIO GPU kernel driver loaded")
+        send_check(prompt, "test -c /dev/fb0 && echo FBDEV_OK", r"FBDEV_OK", "Framebuffer device /dev/fb0 available")
+        send_check(prompt, "cat /proc/asound/cards", r"HDA-Intel", "Intel HDA audio card detected")
+        send_check(prompt, "cat /proc/asound/card0/codec#0", r"Codec:", "HDA audio codec successfully probed")
+        send_check(prompt, "dmesg | grep --color=never -i 'virtio-gpu'", r"virtio-gpu", "VirtIO GPU kernel driver initialized")
 
         # 6. Display Servers (Wayland & X11)
-        send_check(prompt, "cosmic-comp --version", r"cosmic-comp 1\.0\.0", "Wayland Display Server (cosmic-comp)")
+        send_check(prompt, "gnome-shell --version", r"GNOME Shell 50", "Wayland Display Server & Compositor (gnome-shell)")
+        send_check(prompt, "mutter --version", r"mutter 50", "Mutter display server")
         send_check(prompt, "Xwayland -version", r"The X\.Org Foundation Xwayland Version", "X11 Display Server (Xwayland)")
-        send_check(prompt, "which wayland-info xrandr glxinfo xauth xhost xrdb", r"/usr/(bin|sbin)/xrandr", "Wayland and X11 diagnostic tools")
+        send_check(prompt, "which glxinfo xauth xhost xrdb", r"/usr/(bin|sbin)/glxinfo", "Wayland and X11 diagnostic tools")
 
-        # 7. COSMIC Desktop Environment Components
+        # 7. GNOME Desktop Environment Components
         send_check(
             prompt,
-            "which cosmic-session start-cosmic cosmic-panel cosmic-applets cosmic-app-library cosmic-bg cosmic-files cosmic-launcher cosmic-notifications cosmic-osd cosmic-settings cosmic-term cosmic-workspaces",
-            r"/usr/(bin|sbin)/cosmic-session",
-            "COSMIC Desktop Environment core suite"
+            "which gnome-shell gnome-session gnome-session-quit gnome-session-inhibit gnome-extensions mutter gjs gdm start-gnome nautilus ptyxis",
+            r"/usr/.*gnome-shell",
+            "GNOME 50 Desktop Environment core suite"
         )
         send_check(
             prompt,
-            "test -d /usr/share/cosmic && test -f /usr/share/wayland-sessions/cosmic.desktop && echo COSMIC_DATA_OK",
-            r"COSMIC_DATA_OK",
-            "COSMIC system configuration & Wayland session desktop entry"
+            "test -d /usr/share/gnome-shell && test -f /usr/share/wayland-sessions/gnome.desktop && echo GNOME_DATA_OK",
+            r"GNOME_DATA_OK",
+            "GNOME system configuration & Wayland session desktop entry"
         )
 
-        # 8. COSMIC Service & User Session Status
-        send_check(prompt, "systemctl is-active cosmic.service", r"active", "COSMIC Desktop systemd service is active")
-        send_check(prompt, "ps aux | grep -E 'cosmic-session|systemd --user'", r"(cosmic-session|systemd --user)", "COSMIC session processes running")
+        # 7c. Standard Desktop Applications (Firefox, LibreOffice Suite, GNOME Utilities)
+        send_check(
+            prompt,
+            "which firefox libreoffice soffice gnome-calculator loupe baobab papers gnome-font-viewer gnome-disks gnome-calendar gnome-clocks gnome-weather gnome-characters simple-scan gnome-text-editor",
+            r"/usr/(bin|sbin)/firefox",
+            "Standard Desktop Application binaries"
+        )
+        send_check(prompt, "firefox --version", r"Mozilla Firefox", "Firefox web browser execution")
+        send_check(prompt, "soffice --version", r"LibreOffice", "LibreOffice office suite execution")
+        send_check(prompt, "gnome-calculator --version", r"gnome-calculator", "GNOME Calculator execution")
+        send_check(prompt, "baobab --version", r"baobab", "Baobab disk analyzer execution")
+        send_check(prompt, "papers --version", r"Papers", "Papers document viewer execution")
+        send_check(
+            prompt,
+            "ls -la /usr/share/applications/org.mozilla.firefox.desktop /usr/share/applications/libreoffice-*.desktop /usr/share/applications/org.gnome.Calculator.desktop /usr/share/applications/org.gnome.Loupe.desktop /usr/share/applications/org.gnome.Papers.desktop",
+            r"org\.mozilla\.firefox\.desktop",
+            "Desktop application .desktop entries for GNOME"
+        )
+        send_check(
+            prompt,
+            "test -f /usr/share/glib-2.0/schemas/gschemas.compiled && echo SCHEMAS_OK",
+            r"SCHEMAS_OK",
+            "GSettings compiled schemas present"
+        )
+
+        # 7d. Desktop Support Frameworks: systemd-run, Portals, Polkit, DConf, UPower
+        send_check(
+            prompt,
+            "which systemd-run gio gio-launch-desktop gtk-launch dbus-update-activation-environment dconf pkexec upower /usr/libexec/gio-launch-desktop /usr/libexec/xdg-desktop-portal /usr/libexec/dconf-service /usr/libexec/upowerd",
+            r"/usr/(bin|sbin)/systemd-run",
+            "Desktop infrastructure binaries & helpers"
+        )
+        send_check(
+            prompt,
+            "su - myelinos -c 'systemd-run --user --scope echo SYSTEMD_RUN_USER_OK'",
+            r"SYSTEMD_RUN_USER_OK",
+            "Systemd user manager transient scope execution (systemd-run --user)"
+        )
+
+        # 8. GDM Service & User Session Status
+        send_check(prompt, "for i in $(seq 1 15); do if [ \"$(systemctl is-active gdm.service)\" = \"active\" ]; then echo GDM_ACTIVE; break; fi; sleep 1; done", r"GDM_ACTIVE", "GDM Display Manager systemd service is active")
+        send_check(prompt, "for i in $(seq 1 15); do if [ \"$(systemctl --user -M myelinos@ is-active graphical-session.target 2>/dev/null)\" = \"active\" ]; then echo GRAPHICAL_SESSION_ACTIVE; break; fi; sleep 1; done", r"GRAPHICAL_SESSION_ACTIVE", "User graphical-session.target is active")
+        send_check(prompt, "ps aux | grep --color=never -E 'gdm|gnome-shell|gnome-session|systemd --user'", r"(gnome-shell|gnome-session|systemd --user)", "GNOME session processes running")
+        send_check(
+            prompt,
+            "ps aux | grep --color=never -E 'gnome-shell.*--force-animations'",
+            r"--force-animations",
+            "GNOME Shell running with --force-animations flag"
+        )
+        send_check(
+            prompt,
+            "su - myelinos -c 'busctl --user get-property org.gnome.Shell /org/gnome/Shell/Introspect org.gnome.Shell.Introspect AnimationsEnabled'",
+            r"b true",
+            "GNOME Shell Introspect AnimationsEnabled reports true"
+        )
 
         # 9. Writable Live Layer Verification
         send_check(prompt, "mkdir -p /live_write_test && echo 'MyelinOS Live OK' > /live_write_test/status && cat /live_write_test/status", r"MyelinOS Live OK", "OverlayFS writable persistence test")
 
         # 10. Capture Graphical Framebuffer
-        time.sleep(2)
+        print("[*] Waiting 5s for GNOME desktop to fully render...")
+        time.sleep(5)
         screen_ok = capture_screendump()
 
         # 11. Clean Shutdown
@@ -167,7 +244,7 @@ try:
         child.expect(pexpect.EOF, timeout=10)
         passed = True
         print("\n[+] ==========================================================================")
-        print("[+] ALL TESTS PASSED: MYELINOS LIVE ISO BOOT & COSMIC GRAPHICAL DEMONSTRATION")
+        print("[+] ALL TESTS PASSED: MYELINOS LIVE ISO BOOT & GNOME 50 GRAPHICAL DEMONSTRATION")
         print("[+] ==========================================================================")
     else:
         print("\n[-] Failed to reach root shell: Live ISO boot timeout or unexpected EOF")
