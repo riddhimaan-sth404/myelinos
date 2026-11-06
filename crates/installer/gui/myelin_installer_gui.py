@@ -12,16 +12,29 @@ Guides user through:
 
 import sys
 import os
+import socket
 import subprocess
 import threading
 import time
 import json
+import traceback
 from pathlib import Path
 
 import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Gtk, Adw, GLib, Gio
+
+def log(msg):
+    ts = time.strftime("%Y-%m-%d %H:%M:%S")
+    line = f"[{ts}] {msg}\n"
+    print(line, end="")
+    for p in ["/home/myelinos/myelin-installer.log", "/tmp/myelin-installer.log", "/var/log/myelin-installer.log"]:
+        try:
+            with open(p, "a") as f:
+                f.write(line)
+        except Exception:
+            pass
 
 PRESETS = [
     {
@@ -164,18 +177,38 @@ PRESETS = [
     },
 ]
 
+def check_internet():
+    try:
+        res = subprocess.run(["ip", "route", "show", "default"], capture_output=True, text=True, timeout=1)
+        if not res.stdout.strip():
+            return False
+        import urllib.request
+        with urllib.request.urlopen("http://archlinux.org", timeout=1.5) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
 class MyelinInstallerWindow(Adw.ApplicationWindow):
     def __init__(self, app):
         super().__init__(application=app, title="MyelinOS Installer (Stage 2)")
-        self.set_default_size(900, 680)
+        self.set_default_size(1280, 800)
         self.set_size_request(760, 540)
+
+        # Enforce full-screen kiosk mode: nothing else is visible or usable
+        self.fullscreen()
+        self.maximize()
+        self.set_deletable(False)
+        Adw.StyleManager.get_default().set_color_scheme(Adw.ColorScheme.FORCE_DARK)
+        self.lock_desktop()
 
         # Main Box
         main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.set_content(main_box)
 
-        # Header Bar
+        # Header Bar without window control buttons
         header = Adw.HeaderBar()
+        header.set_show_end_title_buttons(False)
+        header.set_show_start_title_buttons(False)
         title_widget = Adw.WindowTitle(title="MyelinOS Setup", subtitle="Stage 2: Personalization & System Finalization")
         header.set_title_widget(title_widget)
         main_box.append(header)
@@ -212,6 +245,19 @@ class MyelinInstallerWindow(Adw.ApplicationWindow):
         self.preset_checkboxes = {}
         self.build_pages()
 
+    def lock_desktop(self):
+        """Lock down desktop environment so no other apps, overview, or shortcuts are usable."""
+        try:
+            subprocess.run(["gsettings", "set", "org.gnome.mutter", "overlay-key", "''"], check=False)
+            subprocess.run(["gsettings", "set", "org.gnome.desktop.wm.keybindings", "switch-applications", "['']"], check=False)
+            subprocess.run(["gsettings", "set", "org.gnome.desktop.wm.keybindings", "switch-windows", "['']"], check=False)
+            subprocess.run(["gsettings", "set", "org.gnome.desktop.wm.keybindings", "panel-main-menu", "['']"], check=False)
+            subprocess.run(["gsettings", "set", "org.gnome.desktop.wm.keybindings", "panel-run-dialog", "['']"], check=False)
+            subprocess.run(["gsettings", "set", "org.gnome.shell.keybindings", "toggle-overview", "['']"], check=False)
+            subprocess.run(["gsettings", "set", "org.gnome.shell.keybindings", "toggle-application-view", "['']"], check=False)
+        except Exception as e:
+            print(f"lock_desktop notice: {e}")
+
     def build_pages(self):
         # Page 0: Welcome
         self.page_welcome = self.create_welcome_page()
@@ -236,14 +282,21 @@ class MyelinInstallerWindow(Adw.ApplicationWindow):
         self.stack.set_visible_child_name("welcome")
 
     def create_welcome_page(self):
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_vexpand(True)
+        scrolled.set_hexpand(True)
+        scrolled.set_propagate_natural_height(False)
+        scrolled.set_propagate_natural_width(False)
+
         clamp = Adw.Clamp(maximum_size=620)
         clamp.set_vexpand(True)
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16, margin_top=28, margin_bottom=28, margin_start=24, margin_end=24)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12, margin_top=16, margin_bottom=16, margin_start=24, margin_end=24)
         clamp.set_child(box)
+        scrolled.set_child(clamp)
 
         # Icon
         icon = Gtk.Image.new_from_icon_name("system-software-install")
-        icon.set_pixel_size(96)
+        icon.set_pixel_size(64)
         box.append(icon)
 
         title = Gtk.Label(label="Welcome to MyelinOS")
@@ -271,13 +324,20 @@ class MyelinInstallerWindow(Adw.ApplicationWindow):
         row3.add_prefix(Gtk.Image.new_from_icon_name("package-x-generic"))
         pref_group.add(row3)
 
-        return clamp
+        return scrolled
 
     def create_user_page(self):
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_vexpand(True)
+        scrolled.set_hexpand(True)
+        scrolled.set_propagate_natural_height(False)
+        scrolled.set_propagate_natural_width(False)
+
         clamp = Adw.Clamp(maximum_size=550)
         clamp.set_vexpand(True)
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16, margin_top=24, margin_bottom=24, margin_start=24, margin_end=24)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12, margin_top=16, margin_bottom=16, margin_start=24, margin_end=24)
         clamp.set_child(box)
+        scrolled.set_child(clamp)
 
         title = Gtk.Label(label="User Account Setup")
         title.add_css_class("title-2")
@@ -288,22 +348,22 @@ class MyelinInstallerWindow(Adw.ApplicationWindow):
 
         self.fullname_row = Adw.EntryRow(title="Full Name")
         self.fullname_row.set_text("Myelin User")
-        self.fullname_row.connect("entry-activated", lambda r: self.on_next_clicked(None))
+        self.fullname_row.connect("entry-activated", lambda r: self.username_row.grab_focus())
         group.add(self.fullname_row)
 
         self.username_row = Adw.EntryRow(title="Username")
         self.username_row.set_text("myelinos")
-        self.username_row.connect("entry-activated", lambda r: self.on_next_clicked(None))
+        self.username_row.connect("entry-activated", lambda r: self.password_row.grab_focus())
         group.add(self.username_row)
 
         self.password_row = Adw.PasswordEntryRow(title="Password")
         self.password_row.set_text("myelinos")
-        self.password_row.connect("entry-activated", lambda r: self.on_next_clicked(None))
+        self.password_row.connect("entry-activated", lambda r: self.confirm_row.grab_focus())
         group.add(self.password_row)
 
         self.confirm_row = Adw.PasswordEntryRow(title="Confirm Password")
         self.confirm_row.set_text("myelinos")
-        self.confirm_row.connect("entry-activated", lambda r: self.on_next_clicked(None))
+        self.confirm_row.connect("entry-activated", lambda r: self.sudo_switch.grab_focus())
         group.add(self.confirm_row)
 
         self.sudo_switch = Adw.SwitchRow(title="Administrator Privileges", subtitle="Allow user to run commands as root with sudo")
@@ -314,13 +374,20 @@ class MyelinInstallerWindow(Adw.ApplicationWindow):
         self.autologin_switch.set_active(True)
         group.add(self.autologin_switch)
 
-        return clamp
+        return scrolled
 
     def create_system_page(self):
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_vexpand(True)
+        scrolled.set_hexpand(True)
+        scrolled.set_propagate_natural_height(False)
+        scrolled.set_propagate_natural_width(False)
+
         clamp = Adw.Clamp(maximum_size=550)
         clamp.set_vexpand(True)
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16, margin_top=24, margin_bottom=24, margin_start=24, margin_end=24)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12, margin_top=16, margin_bottom=16, margin_start=24, margin_end=24)
         clamp.set_child(box)
+        scrolled.set_child(clamp)
 
         title = Gtk.Label(label="System Localization")
         title.add_css_class("title-2")
@@ -331,29 +398,31 @@ class MyelinInstallerWindow(Adw.ApplicationWindow):
 
         self.hostname_row = Adw.EntryRow(title="Device Hostname")
         self.hostname_row.set_text("myelinos")
-        self.hostname_row.connect("entry-activated", lambda r: self.on_next_clicked(None))
+        self.hostname_row.connect("entry-activated", lambda r: self.timezone_row.grab_focus())
         group.add(self.hostname_row)
 
         self.timezone_row = Adw.EntryRow(title="Timezone (e.g. UTC, Asia/Kolkata, America/New_York)")
         self.timezone_row.set_text("UTC")
-        self.timezone_row.connect("entry-activated", lambda r: self.on_next_clicked(None))
+        self.timezone_row.connect("entry-activated", lambda r: self.locale_row.grab_focus())
         group.add(self.timezone_row)
 
         self.locale_row = Adw.EntryRow(title="System Locale")
         self.locale_row.set_text("en_US.UTF-8")
-        self.locale_row.connect("entry-activated", lambda r: self.on_next_clicked(None))
+        self.locale_row.connect("entry-activated", lambda r: self.next_btn.grab_focus())
         group.add(self.locale_row)
 
-        return clamp
+        return scrolled
 
     def create_presets_page(self):
         scrolled = Gtk.ScrolledWindow()
         scrolled.set_vexpand(True)
         scrolled.set_hexpand(True)
+        scrolled.set_propagate_natural_height(False)
+        scrolled.set_propagate_natural_width(False)
 
         clamp = Adw.Clamp(maximum_size=680)
         clamp.set_vexpand(True)
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16, margin_top=20, margin_bottom=24, margin_start=24, margin_end=24)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12, margin_top=16, margin_bottom=16, margin_start=24, margin_end=24)
         clamp.set_child(box)
         scrolled.set_child(clamp)
 
@@ -433,10 +502,17 @@ class MyelinInstallerWindow(Adw.ApplicationWindow):
         return selected
 
     def create_progress_page(self):
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_vexpand(True)
+        scrolled.set_hexpand(True)
+        scrolled.set_propagate_natural_height(False)
+        scrolled.set_propagate_natural_width(False)
+
         clamp = Adw.Clamp(maximum_size=550)
         clamp.set_vexpand(True)
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=20, margin_top=40, margin_bottom=40, margin_start=24, margin_end=24)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16, margin_top=24, margin_bottom=24, margin_start=24, margin_end=24)
         clamp.set_child(box)
+        scrolled.set_child(clamp)
 
         self.progress_title = Gtk.Label(label="Finalizing Installation...")
         self.progress_title.add_css_class("title-2")
@@ -474,7 +550,7 @@ class MyelinInstallerWindow(Adw.ApplicationWindow):
         self.reboot_btn.connect("clicked", self.on_reboot_clicked)
         self.done_box.append(self.reboot_btn)
 
-        return clamp
+        return scrolled
 
     def on_prev_clicked(self, btn):
         if self.step > 0:
@@ -484,6 +560,12 @@ class MyelinInstallerWindow(Adw.ApplicationWindow):
             self.update_nav()
 
     def on_next_clicked(self, btn):
+        now = time.time()
+        if hasattr(self, "_last_next_time") and now - self._last_next_time < 0.6:
+            return
+        self._last_next_time = now
+        log(f"on_next_clicked invoked at step {self.step}")
+
         if self.step == 1:
             # Validate user credentials
             p1 = self.password_row.get_text()
@@ -498,10 +580,12 @@ class MyelinInstallerWindow(Adw.ApplicationWindow):
         if self.step < 3:
             self.step += 1
             pages = ["welcome", "user", "system", "presets", "progress"]
+            log(f"Advancing stack to page: {pages[self.step]}")
             self.stack.set_visible_child_name(pages[self.step])
             self.update_nav()
         elif self.step == 3:
             # Start installation / sealing
+            log("Starting installation and sealing background thread...")
             self.step = 4
             self.stack.set_visible_child_name("progress")
             self.action_bar.set_visible(False)
@@ -535,13 +619,16 @@ class MyelinInstallerWindow(Adw.ApplicationWindow):
         ]
 
         for desc, pct, func, args in steps:
+            log(f"run_finalization step: {desc}")
             GLib.idle_add(self.update_progress, desc, pct)
-            time.sleep(0.7)
+            time.sleep(0.3)
             try:
                 func(*args)
+                log(f"run_finalization completed: {desc}")
             except Exception as e:
-                print(f"Error in {desc}: {e}")
+                log(f"Error in {desc}: {e}\n{traceback.format_exc()}")
 
+        log("run_finalization: all tasks finished, invoking show_completed")
         GLib.idle_add(self.show_completed)
 
     def update_progress(self, desc, pct):
@@ -582,12 +669,61 @@ class MyelinInstallerWindow(Adw.ApplicationWindow):
         """Installs the packages and creates application desktop entries for selected presets."""
         app_dir = Path("/usr/share/applications")
         user_app_dir = Path(f"/home/{username}/.local/share/applications")
+        cache_dir = Path("/var/cache/myelin/packages")
         subprocess.run(["sudo", "mkdir", "-p", str(app_dir)], check=False)
         subprocess.run(["sudo", "mkdir", "-p", str(user_app_dir)], check=False)
+        subprocess.run(["sudo", "mkdir", "-p", "/usr/local/bin"], check=False)
 
+        # Check network connectivity
+        has_network = check_internet()
+        log(f"install_presets: network connectivity = {has_network}")
+
+        cached_files = list(cache_dir.glob("*.pkg.tar.zst")) if cache_dir.exists() else []
+        log(f"install_presets: found {len(cached_files)} cached packages: {[f.name for f in cached_files]}")
+
+        axon_bin = "/usr/bin/axon" if Path("/usr/bin/axon").exists() else "/usr/sbin/axon"
+        installed_packages = []
         for preset in selected_presets:
-            print(f"[*] Installing preset: {preset['name']} ({len(preset['packages'])} packages)...")
-            
+            log(f"[*] Processing preset: {preset['name']} ({len(preset['packages'])} packages)...")
+            for pkg in preset.get("packages", []):
+                # Check if package is already in PATH
+                res = subprocess.run(["which", pkg], capture_output=True)
+                if res.returncode == 0:
+                    installed_packages.append(pkg)
+                    continue
+
+                # If offline and not in cache, avoid hanging on network timeouts
+                is_cached = any(f.name.startswith(f"{pkg}-") for f in cached_files)
+                if not has_network and not is_cached:
+                    log(f"[-] Offline and {pkg} not cached. Skipping binary install.")
+                    continue
+
+                # Run real package install with axon
+                log(f"[*] Invoking axon package manager for: {pkg}...")
+                try:
+                    axon_res = subprocess.run(
+                        ["sudo", axon_bin, "install", pkg, "--system", "--allow-host-mutation"],
+                        capture_output=True,
+                        text=True,
+                        timeout=30
+                    )
+                    if axon_res.returncode == 0:
+                        log(f"[+] Axon successfully installed {pkg}")
+                        installed_packages.append(pkg)
+                    else:
+                        err_msg = axon_res.stderr.strip() or axon_res.stdout.strip()
+                        log(f"[-] Axon notice for {pkg}: {err_msg}")
+                except Exception as e:
+                    log(f"[-] Axon execution error for {pkg}: {e}")
+
+            # Link any newly installed binaries from the profile to /usr/local/bin
+            profile_bin = Path("/var/lib/myelin/profiles/system/bin")
+            if profile_bin.exists():
+                for b in profile_bin.iterdir():
+                    dest_bin = Path("/usr/local/bin") / b.name
+                    if not dest_bin.exists():
+                        subprocess.run(["sudo", "ln", "-sf", str(b), str(dest_bin)], check=False)
+
             # Install launchers for GUI applications
             for app_title, app_bin, app_cats, app_icon in preset.get("launchers", []):
                 desktop_content = f"""[Desktop Entry]
@@ -604,13 +740,14 @@ X-Myelin-Preset={preset['id']}
                 try:
                     subprocess.run(["sudo", "sh", "-c", f"cat << 'EOF' > {dest_file}\n{desktop_content}\nEOF"], check=False)
                 except Exception as e:
-                    print(f"Failed to write launcher for {app_title}: {e}")
+                    log(f"Failed to write launcher for {app_title}: {e}")
 
         subprocess.run(["sudo", "chown", "-R", f"{username}:{username}", f"/home/{username}"], check=False)
 
     def seal_generation(self, username, selected_presets):
+        log("seal_generation: writing generation metadata and seal marker...")
         subprocess.run(["sudo", "mkdir", "-p", "/var/lib/myelin/generations"], check=False)
-        subprocess.run(["sudo", "chown", "-R", f"{os.getuid()}:{os.getgid()}", "/var/lib/myelin"], check=False)
+        subprocess.run(["sudo", "chmod", "-R", "777", "/var/lib/myelin"], check=False)
         
         all_pkgs = []
         preset_ids = []
@@ -631,14 +768,28 @@ X-Myelin-Preset={preset['id']}
         with open("/var/lib/myelin/generations/current", "w") as f:
             f.write("1\n")
 
+        # Write permanent installation seal marker
+        subprocess.run(["sudo", "touch", "/var/lib/myelin/installed"], check=False)
+        subprocess.run(["sudo", "sync"], check=False)
+        log("seal_generation: Generation 1 sealed and /var/lib/myelin/installed created.")
+
     def finalize_boot(self, username, autologin, selected_presets):
-        # 1. Permanently remove installer desktop entries
+        log(f"finalize_boot: cleaning autostart and restoring gnome-session for user {username}...")
+        # 1. Permanently remove installer desktop entries & script
         for p in [
             "/etc/xdg/autostart/org.myelinos.Installer.desktop",
             "/home/myelinos/.config/autostart/org.myelinos.Installer.desktop",
             f"/home/{username}/.config/autostart/org.myelinos.Installer.desktop",
+            "/usr/bin/myelin-installer-gui",
+            "/etc/systemd/user/myelin-installer.service",
+            "/etc/systemd/user/default.target.wants/myelin-installer.service",
+            "/etc/systemd/user/graphical-session.target.wants/myelin-installer.service",
         ]:
             subprocess.run(["sudo", "rm", "-f", p], check=False)
+
+        if Path("/usr/bin/gnome-session-real").exists():
+            subprocess.run(["sudo", "mv", "-f", "/usr/bin/gnome-session-real", "/usr/bin/gnome-session"], check=False)
+            log("finalize_boot: /usr/bin/gnome-session-real restored to /usr/bin/gnome-session")
 
         # 2. Update /etc/gdm/custom.conf to transition from installer live user to real user
         gdm_conf = f"""# GDM configuration for MyelinOS (Sealed Generation 1)
@@ -660,21 +811,43 @@ InitialSetupEnable=false
         else:
             subprocess.run(["sudo", "systemctl", "set-default", "graphical.target"], check=False)
 
+        # 4. Re-enable standard GNOME shortcuts for user session
+        try:
+            subprocess.run(["gsettings", "reset", "org.gnome.mutter", "overlay-key"], check=False)
+            subprocess.run(["gsettings", "reset", "org.gnome.desktop.wm.keybindings", "switch-applications"], check=False)
+            subprocess.run(["gsettings", "reset", "org.gnome.desktop.wm.keybindings", "switch-windows"], check=False)
+            subprocess.run(["gsettings", "reset", "org.gnome.settings-daemon.plugins.media-keys", "terminal"], check=False)
+        except Exception:
+            pass
+
         subprocess.run(["sync"])
+        log("finalize_boot: complete.")
 
     def on_reboot_clicked(self, btn):
-        subprocess.run(["sudo", "systemctl", "reboot"])
+        log("on_reboot_clicked: Rebooting system into production desktop...")
+        res = subprocess.run(["sudo", "systemctl", "reboot"], check=False)
+        if res.returncode != 0:
+            subprocess.run(["sudo", "reboot", "-f"], check=False)
 
 class MyelinInstallerApp(Adw.Application):
     def __init__(self):
-        super().__init__(application_id="org.myelinos.Installer", flags=Gio.ApplicationFlags.FLAGS_NONE)
+        super().__init__(application_id="org.myelinos.Installer", flags=Gio.ApplicationFlags.NON_UNIQUE)
+        self.connect("activate", self.on_activate)
 
-    def do_activate(self):
-        win = self.props.active_window
-        if not win:
-            win = MyelinInstallerWindow(self)
-        win.present()
+    def on_activate(self, app):
+        try:
+            win = self.props.active_window
+            if not win:
+                win = MyelinInstallerWindow(self)
+            win.present()
+            GLib.idle_add(win.fullscreen)
+        except Exception as e:
+            log(f"Error in on_activate: {e}\n{traceback.format_exc()}")
 
 if __name__ == "__main__":
+    if Path("/var/lib/myelin/installed").exists():
+        print("[*] MyelinOS installation already completed. Exiting.")
+        sys.exit(0)
+    log("[*] Starting MyelinInstallerApp...")
     app = MyelinInstallerApp()
     sys.exit(app.run(sys.argv))

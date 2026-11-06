@@ -158,35 +158,76 @@ impl PackageManager {
         Ok((new_gen, pkg_ref))
     }
 
-    /// Fetches an official Arch Linux binary package (.pkg.tar.zst) from mirrors,
+    /// Fetches an official Arch Linux binary package (.pkg.tar.zst) from cache or mirrors,
     /// ingests it into CAS, and publishes a new profile generation.
     pub fn install_arch_package(
         &self,
         name: &str,
         env: &EnvironmentId,
     ) -> Result<(Generation, PackageRef)> {
-        // 1. Fetch info from official Arch repos
-        let pkg_info = crate::arch::ArchClient::get_package_info(name)?
-            .ok_or_else(|| MyelinError::ObjectNotFound(format!("Arch package '{}' not found in official repositories", name)))?;
-
-        // 2. Download into temporary directory
-        let tmp_dir = self.store.root().join("tmp");
-        fs::create_dir_all(&tmp_dir)?;
-        let pkg_file = tmp_dir.join(&pkg_info.filename);
-        crate::arch::ArchClient::download_package(&pkg_info, &pkg_file)?;
-
-        // 3. Determine tier
+        // 1. Determine tier
         let tier = if env.is_host() {
             PackageTier::HostSystem
         } else {
             PackageTier::UserApplication
         };
 
-        // 4. Ingest into CAS store
-        let (manifest, digest, _unpacked) = crate::arch::ArchClient::ingest_arch_package(&self.store, &pkg_file, tier)?;
+        // 2. Check local package caches first
+        let cache_dirs = [
+            PathBuf::from("/var/cache/myelin/packages"),
+            PathBuf::from("/usr/share/myelin/packages"),
+            PathBuf::from("build/packages/cache"),
+            self.store.root().join("cache"),
+            PathBuf::from("/tmp/packages"),
+        ];
 
-        // Clean up download file
-        let _ = fs::remove_file(pkg_file);
+        let mut cached_pkg: Option<PathBuf> = None;
+        for cdir in &cache_dirs {
+            if cdir.exists() {
+                if let Ok(entries) = fs::read_dir(cdir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if let Some(fname) = path.file_name().and_then(|n| n.to_str()) {
+                            let prefix = format!("{}-", name);
+                            if (fname.starts_with(&prefix) || fname == format!("{}.pkg.tar.zst", name))
+                                && fname.ends_with(".pkg.tar.zst")
+                            {
+                                cached_pkg = Some(path);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            if cached_pkg.is_some() {
+                break;
+            }
+        }
+
+        let (manifest, digest, _unpacked) = if let Some(pkg_file) = cached_pkg {
+            crate::arch::ArchClient::ingest_arch_package(&self.store, &pkg_file, tier)?
+        } else {
+            // Fetch info from official Arch repos
+            let pkg_info = crate::arch::ArchClient::get_package_info(name)?
+                .ok_or_else(|| MyelinError::ObjectNotFound(format!("Arch package '{}' not found in official repositories or local cache", name)))?;
+
+            // Download into temporary directory
+            let tmp_dir = self.store.root().join("tmp");
+            fs::create_dir_all(&tmp_dir)?;
+            let pkg_file = tmp_dir.join(&pkg_info.filename);
+            crate::arch::ArchClient::download_package(&pkg_info, &pkg_file)?;
+
+            let res = crate::arch::ArchClient::ingest_arch_package(&self.store, &pkg_file, tier)?;
+
+            // Cache for future offline use
+            let cache_target_dir = PathBuf::from("/var/cache/myelin/packages");
+            if fs::create_dir_all(&cache_target_dir).is_ok() {
+                let _ = fs::copy(&pkg_file, cache_target_dir.join(&pkg_info.filename));
+            }
+
+            let _ = fs::remove_file(pkg_file);
+            res
+        };
 
         let pkg_ref = PackageRef {
             id: manifest.id.clone(),
@@ -196,7 +237,7 @@ impl PackageManager {
             description: manifest.description.clone(),
         };
 
-        // 5. Update generation package set
+        // 3. Update generation package set
         let current_gen = self.gen_mgr.current_generation(env)?;
         let mut packages = match &current_gen {
             Some(g) => g.packages.clone(),
@@ -210,6 +251,26 @@ impl PackageManager {
         }
 
         let new_gen = self.gen_mgr.create_generation(env, tier, packages, &self.store)?;
+
+        // 4. Link binaries into system PATH if host/system profile
+        if env.is_host() {
+            let usr_local_bin = PathBuf::from("/usr/local/bin");
+            if fs::create_dir_all(&usr_local_bin).is_ok() {
+                let gen_bin = self.gen_mgr.gen_dir(env, &new_gen.id).join("bin");
+                if gen_bin.exists() {
+                    if let Ok(entries) = fs::read_dir(gen_bin) {
+                        for entry in entries.flatten() {
+                            let bin_path = entry.path();
+                            if let Some(bin_name) = bin_path.file_name() {
+                                let link_path = usr_local_bin.join(bin_name);
+                                let _ = fs::remove_file(&link_path);
+                                let _ = std::os::unix::fs::symlink(&bin_path, &link_path);
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         Ok((new_gen, pkg_ref))
     }

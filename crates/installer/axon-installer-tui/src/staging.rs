@@ -308,6 +308,78 @@ where
         }
     }
 
+    // Deploy latest axon package manager and ax symlink
+    let dest_axon_bin = target_mount.join("usr/bin/axon");
+    for cand in &[
+        "/usr/share/myelin/axon",
+        "/usr/bin/axon",
+    ] {
+        if Path::new(cand).exists() {
+            let _ = fs::copy(cand, &dest_axon_bin);
+            if let Ok(meta) = fs::metadata(&dest_axon_bin) {
+                let mut perms = meta.permissions();
+                perms.set_mode(0o755);
+                let _ = fs::set_permissions(&dest_axon_bin, perms);
+            }
+            let ax_symlink = target_mount.join("usr/bin/ax");
+            let _ = fs::remove_file(&ax_symlink);
+            let _ = std::os::unix::fs::symlink("axon", &ax_symlink);
+            break;
+        }
+    }
+
+    // Deploy pre-cached package archives into /var/cache/myelin/packages
+    let target_cache_dir = target_mount.join("var/cache/myelin/packages");
+    let _ = fs::create_dir_all(&target_cache_dir);
+    for cand_cache in &[
+        Path::new("/usr/share/myelin/packages"),
+        Path::new("/run/installer/medium/packages"),
+    ] {
+        if cand_cache.exists() {
+            if let Ok(entries) = fs::read_dir(cand_cache) {
+                for entry in entries.flatten() {
+                    let src = entry.path();
+                    if src.is_file() {
+                        let dest = target_cache_dir.join(src.file_name().unwrap());
+                        let _ = fs::copy(&src, &dest);
+                    }
+                }
+            }
+        }
+    }
+
+    // Ensure Stage 2 GUI launches reliably upon graphical desktop initialization
+    let gnome_session = target_mount.join("usr/bin/gnome-session");
+    let gnome_session_real = target_mount.join("usr/bin/gnome-session-real");
+    if gnome_session.exists() && !gnome_session_real.exists() {
+        let _ = fs::rename(&gnome_session, &gnome_session_real);
+    }
+    let wrapper_script = r#"#!/bin/bash
+if [ ! -f /var/lib/myelin/installed ] && [ -x /usr/bin/myelin-installer-gui ]; then
+    (
+        for i in $(seq 1 60); do
+            if [ -S "/run/user/$(id -u)/wayland-0" ]; then break; fi
+            sleep 0.5
+        done
+        sleep 1.5
+        export WAYLAND_DISPLAY=wayland-0
+        export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+        /usr/bin/python3 /usr/bin/myelin-installer-gui >> /tmp/myelin-installer.log 2>&1
+    ) &
+fi
+if [ -x /usr/bin/gnome-session-real ]; then
+    exec /usr/bin/gnome-session-real "$@"
+else
+    exec /usr/bin/gnome-shell --mode=user
+fi
+"#;
+    let _ = fs::write(&gnome_session, wrapper_script);
+    if let Ok(meta) = fs::metadata(&gnome_session) {
+        let mut perms = meta.permissions();
+        perms.set_mode(0o755);
+        let _ = fs::set_permissions(&gnome_session, perms);
+    }
+
     // Install XDG desktop autostart entry for Stage 2 GUI
     let autostart_dir = target_mount.join("etc/xdg/autostart");
     let _ = fs::create_dir_all(&autostart_dir);
@@ -332,7 +404,12 @@ X-GNOME-Autostart-enabled=true
         let _ = Command::new("chown").args(["-R", "1000:1000", target_mount.join("home/myelinos/.config").to_str().unwrap()]).status();
     }
 
-    // Ensure Axon CAS and myelin configuration dirs are writable by primary user
+    // Ensure Axon CAS, log, and myelin configuration dirs are writable by primary user
+    let _ = Command::new("chmod").args(["-R", "777", target_mount.join("var/lib/myelin").to_str().unwrap()]).status();
+    let _ = Command::new("chmod").args(["-R", "777", target_mount.join("etc/myelin").to_str().unwrap()]).status();
+    let _ = Command::new("chmod").args(["-R", "777", target_mount.join("var/log").to_str().unwrap()]).status();
+    let _ = Command::new("chown").args(["-R", "1000:1000", target_mount.join("var/lib/myelin").to_str().unwrap()]).status();
+    let _ = Command::new("chown").args(["-R", "1000:1000", target_mount.join("etc/myelin").to_str().unwrap()]).status();
     let _ = Command::new("chown").args(["-R", "1000:1000", target_mount.join("var/lib/myelin").to_str().unwrap()]).status();
     let _ = Command::new("chown").args(["-R", "1000:1000", target_mount.join("etc/myelin").to_str().unwrap()]).status();
 

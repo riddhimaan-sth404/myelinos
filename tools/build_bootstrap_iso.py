@@ -125,8 +125,8 @@ def check_prerequisites():
     print("[+] All dependencies satisfied.")
 
 def build_installer_binary():
-    print("[*] Building release binary for axon-installer-tui...")
-    cmd = ["cargo", "build", "--release", "-p", "axon-installer-tui"]
+    print("[*] Building release binary for axon-installer-tui and axon...")
+    cmd = ["cargo", "build", "--release", "-p", "axon-installer-tui", "-p", "axon"]
     subprocess.check_call(cmd, cwd=str(BASE_DIR))
     if not AXON_BOOTSTRAP_BIN.exists():
         raise FileNotFoundError(f"Compiled binary missing at {AXON_BOOTSTRAP_BIN}")
@@ -225,6 +225,20 @@ def build_initramfs():
         if gui_script.exists():
             print(f"[*] Embedding Stage 2 GUI installer script into initramfs...")
             shutil.copy2(gui_script, myelin_share / "myelin_installer_gui.py")
+
+        axon_bin = BASE_DIR / "target" / "release" / "axon"
+        if axon_bin.exists():
+            print(f"[*] Embedding axon package manager into initramfs...")
+            shutil.copy2(axon_bin, myelin_share / "axon")
+            (myelin_share / "axon").chmod(0o755)
+
+        cache_dir = BASE_DIR / "build" / "packages" / "cache"
+        if cache_dir.exists():
+            dest_cache = myelin_share / "packages"
+            dest_cache.mkdir(parents=True, exist_ok=True)
+            for pkg in cache_dir.glob("*.pkg.tar.zst"):
+                print(f"[*] Embedding cached package {pkg.name} into initramfs...")
+                shutil.copy2(pkg, dest_cache / pkg.name)
 
         # 6. Write /init
         init_file = root / "init"

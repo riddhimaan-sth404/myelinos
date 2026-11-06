@@ -120,6 +120,67 @@ def convert_ppm_to_png(ppm_path: Path, png_path: Path):
         return True
     return False
 
+def find_suggested_button(img_path: Path, is_final: bool = False):
+    if not img_path.exists():
+        return (-1, -1) if is_final else (880, 773)
+    im = Image.open(img_path)
+    pixels = im.load()
+    w, h = im.size
+    
+    if is_final:
+        # Check if the bottom action bar is still present (if so, we are NOT on the final screen yet)
+        pts_action_bar = []
+        for y in range(740, min(h, 795)):
+            for x in range(750, min(w, 1260)):
+                r, g, b = pixels[x, y][:3]
+                if (35 <= r <= 100 and 100 <= g <= 170 and 190 <= b <= 255) or (r > 200 and g > 200 and b > 200):
+                    pts_action_bar.append((x, y))
+        if len(pts_action_bar) > 40:
+            return (-1, -1)
+
+        # Search for centered Reboot button in done_box (centered horizontally at 450..830, y between 450..700)
+        pts = []
+        for y in range(450, 700):
+            for x in range(450, 830):
+                r, g, b = pixels[x, y][:3]
+                if 35 <= r <= 100 and 100 <= g <= 170 and 190 <= b <= 255:
+                    pts.append((x, y))
+        if len(pts) > 80:
+            min_x = min(p[0] for p in pts)
+            max_x = max(p[0] for p in pts)
+            min_y = min(p[1] for p in pts)
+            max_y = max(p[1] for p in pts)
+            center_x = (min_x + max_x) // 2
+            center_y = (min_y + max_y) // 2
+            if abs(center_x - 640) < 120 and 18 <= (max_y - min_y) <= 75:
+                return (center_x, center_y)
+        return (-1, -1)
+    else:
+        # Search for Next / Install & Seal button in the bottom-right ActionBar (x in 750..1260, y in 740..795)
+        pts = []
+        for y in range(740, min(h, 795)):
+            for x in range(750, min(w, 1260)):
+                r, g, b = pixels[x, y][:3]
+                if 35 <= r <= 100 and 100 <= g <= 170 and 190 <= b <= 255:
+                    pts.append((x, y))
+
+        if pts and len(pts) > 40:
+            min_x = min(p[0] for p in pts)
+            max_x = max(p[0] for p in pts)
+            min_y = min(p[1] for p in pts)
+            max_y = max(p[1] for p in pts)
+            return ((min_x + max_x) // 2, (min_y + max_y) // 2)
+        return (880, 773)
+
+def click_suggested_action(qmp, img_path: Path, is_final: bool = False, send_enter: bool = True):
+    cx, cy = find_suggested_button(img_path, is_final=is_final)
+    print(f"[*] Targeting action button at ({cx}, {cy})...")
+    if cx > 0 and cy > 0:
+        qmp.click_at(cx, cy)
+    time.sleep(0.3)
+    if send_enter:
+        qmp.send_key("ret")
+
 def main():
     print("=== MyelinOS Complete Stage 2 Lifecycle & Reboot Verification ===")
     if not TARGET_DISK.exists():
@@ -151,75 +212,81 @@ def main():
     try:
         qmp.connect(timeout=25)
 
-        print("[*] Waiting 15 seconds for UEFI boot, GDM auto-login, and Stage 2 installer launch...")
-        time.sleep(15)
-
-        def advance_step():
-            qmp.send_key("ret")
-            time.sleep(0.2)
-            qmp.click_at(965, 735)
+        print("[*] Waiting 18 seconds for UEFI boot, GDM auto-login, and Stage 2 installer launch...")
+        time.sleep(18)
 
         # 1. Capture Page 0: Welcome Page
-        ppm = Path("/tmp/stage2_flow_0.ppm")
+        ppm0 = Path("/tmp/stage2_flow_0.ppm")
         png0 = ARTIFACT_DIR / "stage2_step0_welcome.png"
-        qmp.screendump(ppm)
-        convert_ppm_to_png(ppm, png0)
+        qmp.screendump(ppm0)
+        convert_ppm_to_png(ppm0, png0)
         print(f"[+] Saved Page 0 (Welcome): {png0.name}")
 
         # 2. Advance to User Account Page
-        print("[*] Clicking 'Next' to advance to User Account Setup...")
-        advance_step()
-        time.sleep(2.5)
-        ppm = Path("/tmp/stage2_flow_1.ppm")
+        print("[*] Advancing to User Account Setup...")
+        click_suggested_action(qmp, png0)
+        time.sleep(3)
+        ppm1 = Path("/tmp/stage2_flow_1.ppm")
         png1 = ARTIFACT_DIR / "stage2_step1_user.png"
-        qmp.screendump(ppm)
-        convert_ppm_to_png(ppm, png1)
+        qmp.screendump(ppm1)
+        convert_ppm_to_png(ppm1, png1)
         print(f"[+] Saved Page 1 (User Account Setup): {png1.name}")
 
         # 3. Advance to System Localization Page
-        print("[*] Clicking 'Next' to advance to System Localization...")
-        advance_step()
-        time.sleep(2.5)
-        ppm = Path("/tmp/stage2_flow_2.ppm")
+        print("[*] Advancing to System Localization...")
+        click_suggested_action(qmp, png1)
+        time.sleep(3)
+        ppm2 = Path("/tmp/stage2_flow_2.ppm")
         png2 = ARTIFACT_DIR / "stage2_step2_system.png"
-        qmp.screendump(ppm)
-        convert_ppm_to_png(ppm, png2)
+        qmp.screendump(ppm2)
+        convert_ppm_to_png(ppm2, png2)
         print(f"[+] Saved Page 2 (System Localization): {png2.name}")
 
         # 4. Advance to Presets Page
-        print("[*] Clicking 'Next' to advance to Software Presets...")
-        advance_step()
-        time.sleep(2.5)
-        ppm = Path("/tmp/stage2_flow_3.ppm")
+        print("[*] Advancing to Software Presets...")
+        click_suggested_action(qmp, png2)
+        time.sleep(3)
+        ppm3 = Path("/tmp/stage2_flow_3.ppm")
         png3 = ARTIFACT_DIR / "stage2_step3_presets.png"
-        qmp.screendump(ppm)
-        convert_ppm_to_png(ppm, png3)
+        qmp.screendump(ppm3)
+        convert_ppm_to_png(ppm3, png3)
         print(f"[+] Saved Page 3 (Software Presets Catalog): {png3.name}")
 
         # 5. Trigger Installation & Sealing
-        print("[*] Clicking 'Install & Seal' on Presets Page...")
-        advance_step()
-        print("[*] Waiting 8 seconds for account provisioning, preset registration, and Generation 1 CAS sealing...")
-        time.sleep(8)
-        ppm = Path("/tmp/stage2_flow_4.ppm")
+        print("[*] Triggering 'Install & Seal' on Presets Page...")
+        click_suggested_action(qmp, png3, send_enter=True)
+        print("[*] Polling for installation completion & Generation 1 CAS sealing...")
+        ppm4 = Path("/tmp/stage2_flow_4.ppm")
         png4 = ARTIFACT_DIR / "stage2_step4_completed.png"
-        qmp.screendump(ppm)
-        convert_ppm_to_png(ppm, png4)
-        print(f"[+] Saved Page 4 (Installation & Sealing Complete): {png4.name}")
+
+        reboot_found = False
+        for attempt in range(35):  # up to 70 seconds
+            time.sleep(2)
+            qmp.screendump(ppm4)
+            convert_ppm_to_png(ppm4, png4)
+            cx, cy = find_suggested_button(png4, is_final=True)
+            if cx > 0 and cy > 0:
+                print(f"[+] Finalization complete! Reboot button detected at ({cx}, {cy}) (attempt {attempt+1})")
+                reboot_found = True
+                break
+            else:
+                print(f"[*] Installation still executing... (attempt {attempt+1})")
+        
+        if not reboot_found:
+            print("[-] Polling timeout waiting for Reboot button!")
+            cx, cy = (640, 580)
 
         # 6. Click 'Reboot into MyelinOS'
         print("[*] Triggering 'Reboot into MyelinOS'...")
-        qmp.send_key("ret")
-        time.sleep(0.2)
-        qmp.click_at(640, 500)
-        print("[*] Waiting 16 seconds for system reboot and GNOME Shell reload...")
-        time.sleep(16)
+        click_suggested_action(qmp, png4, is_final=True, send_enter=True)
+        print("[*] Waiting 25 seconds for system reboot and GNOME Shell reload...")
+        time.sleep(25)
 
         # 7. Capture post-reboot desktop
-        ppm = Path("/tmp/stage2_flow_5.ppm")
+        ppm5 = Path("/tmp/stage2_flow_5.ppm")
         png5 = ARTIFACT_DIR / "myelinos_rebooted_desktop.png"
-        qmp.screendump(ppm)
-        convert_ppm_to_png(ppm, png5)
+        qmp.screendump(ppm5)
+        convert_ppm_to_png(ppm5, png5)
         print(f"[+] Saved Post-Reboot Production Desktop: {png5.name}")
 
     finally:
