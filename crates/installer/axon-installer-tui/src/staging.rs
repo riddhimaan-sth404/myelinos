@@ -3,6 +3,16 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+fn run_cmd_quiet(cmd: &str, args: &[&str]) -> bool {
+    Command::new(cmd)
+        .args(args)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InstallProfile {
     DeveloperMinimal,
@@ -70,23 +80,13 @@ fn discover_and_mount_payload(target_root_dev: &str) -> Option<PathBuf> {
 
                 // Attempt read-only mount (with noload for ext4 journal bypass)
                 let mut mounted = false;
-                if let Ok(s) = Command::new("mount")
-                    .args(["-o", "ro,noload", dev, source_dir.to_str().unwrap()])
-                    .status()
-                {
-                    if s.success() {
-                        mounted = true;
-                    }
+                if run_cmd_quiet("mount", &["-o", "ro,noload", dev, source_dir.to_str().unwrap()]) {
+                    mounted = true;
                 }
 
                 if !mounted {
-                    if let Ok(s) = Command::new("mount")
-                        .args(["-o", "ro", dev, source_dir.to_str().unwrap()])
-                        .status()
-                    {
-                        if s.success() {
-                            mounted = true;
-                        }
+                    if run_cmd_quiet("mount", &["-o", "ro", dev, source_dir.to_str().unwrap()]) {
+                        mounted = true;
                     }
                 }
 
@@ -94,7 +94,7 @@ fn discover_and_mount_payload(target_root_dev: &str) -> Option<PathBuf> {
                     if source_dir.join("usr").exists() || source_dir.join("bin").exists() {
                         return Some(source_dir.to_path_buf());
                     }
-                    let _ = Command::new("umount").arg(source_dir).status();
+                    let _ = run_cmd_quiet("umount", &[source_dir.to_str().unwrap()]);
                 }
             }
         }
@@ -121,6 +121,8 @@ where
 
     let mount_root = Command::new("mount")
         .args([root_dev, target_mount.to_str().unwrap()])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .status()
         .map_err(|e| format!("Mounting root partition failed: {}", e))?;
     if !mount_root.success() {
@@ -149,6 +151,8 @@ where
         if let Some(rbin) = rsync_bin {
             let rsync_status = Command::new(rbin)
                 .args(["-a", "--exclude=/boot/efi/*", &format!("{}/.", src_path.display()), target_mount.to_str().unwrap()])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
                 .status();
             if let Ok(s) = rsync_status {
                 if s.success() {
@@ -161,10 +165,12 @@ where
             progress_cb("Copying system root tree to target...", 40);
             let cp_status = Command::new("cp")
                 .args(["-a", &format!("{}/.", src_path.display()), target_mount.to_str().unwrap()])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
                 .status()
                 .map_err(|e| format!("cp payload failed: {}", e))?;
             if !cp_status.success() {
-                let _ = Command::new("umount").arg(target_mount).status();
+                let _ = run_cmd_quiet("umount", &[target_mount.to_str().unwrap()]);
                 return Err("Failed to copy system files from installation source".into());
             }
         }
@@ -184,7 +190,7 @@ where
         }
         if Path::new("/bin/axon").exists() {
             let _ = fs::copy("/bin/axon", target_mount.join("usr/bin/axon"));
-            let _ = Command::new("ln").args(["-sf", "axon", target_mount.join("usr/bin/ax").to_str().unwrap()]).status();
+            let _ = run_cmd_quiet("ln", &["-sf", "axon", target_mount.join("usr/bin/ax").to_str().unwrap()]);
         }
     }
 
@@ -194,10 +200,12 @@ where
 
     let mount_esp = Command::new("mount")
         .args([esp_dev, esp_mount.to_str().unwrap()])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .status()
         .map_err(|e| format!("Mounting ESP failed: {}", e))?;
     if !mount_esp.success() {
-        let _ = Command::new("umount").arg(target_mount).status();
+        let _ = run_cmd_quiet("umount", &[target_mount.to_str().unwrap()]);
         return Err(format!("mount {} /mnt/boot/efi returned {:?}", esp_dev, mount_esp));
     }
 
@@ -229,6 +237,8 @@ where
                 "-p", "/EFI/BOOT",
                 "part_gpt", "fat", "btrfs", "ext2", "normal", "boot", "linux", "search", "search_label", "configfile", "echo",
             ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .status();
     }
 
@@ -401,27 +411,25 @@ X-GNOME-Autostart-enabled=true
     if target_mount.join("home/myelinos").exists() {
         let _ = fs::create_dir_all(&user_autostart);
         let _ = fs::write(user_autostart.join("org.myelinos.Installer.desktop"), desktop_entry);
-        let _ = Command::new("chown").args(["-R", "1000:1000", target_mount.join("home/myelinos/.config").to_str().unwrap()]).status();
+        let _ = run_cmd_quiet("chown", &["-R", "1000:1000", target_mount.join("home/myelinos/.config").to_str().unwrap()]);
     }
 
     // Ensure Axon CAS, log, and myelin configuration dirs are writable by primary user
-    let _ = Command::new("chmod").args(["-R", "777", target_mount.join("var/lib/myelin").to_str().unwrap()]).status();
-    let _ = Command::new("chmod").args(["-R", "777", target_mount.join("etc/myelin").to_str().unwrap()]).status();
-    let _ = Command::new("chmod").args(["-R", "777", target_mount.join("var/log").to_str().unwrap()]).status();
-    let _ = Command::new("chown").args(["-R", "1000:1000", target_mount.join("var/lib/myelin").to_str().unwrap()]).status();
-    let _ = Command::new("chown").args(["-R", "1000:1000", target_mount.join("etc/myelin").to_str().unwrap()]).status();
-    let _ = Command::new("chown").args(["-R", "1000:1000", target_mount.join("var/lib/myelin").to_str().unwrap()]).status();
-    let _ = Command::new("chown").args(["-R", "1000:1000", target_mount.join("etc/myelin").to_str().unwrap()]).status();
+    let _ = run_cmd_quiet("chmod", &["-R", "777", target_mount.join("var/lib/myelin").to_str().unwrap()]);
+    let _ = run_cmd_quiet("chmod", &["-R", "777", target_mount.join("etc/myelin").to_str().unwrap()]);
+    let _ = run_cmd_quiet("chmod", &["-R", "777", target_mount.join("var/log").to_str().unwrap()]);
+    let _ = run_cmd_quiet("chown", &["-R", "1000:1000", target_mount.join("var/lib/myelin").to_str().unwrap()]);
+    let _ = run_cmd_quiet("chown", &["-R", "1000:1000", target_mount.join("etc/myelin").to_str().unwrap()]);
 
     // Systemd target configuration
     let systemd_system = target_mount.join("etc/systemd/system");
     let _ = fs::create_dir_all(&systemd_system);
     match profile {
         InstallProfile::DeveloperMinimal => {
-            let _ = Command::new("ln").args(["-sf", "/lib/systemd/system/multi-user.target", systemd_system.join("default.target").to_str().unwrap()]).status();
+            let _ = run_cmd_quiet("ln", &["-sf", "/lib/systemd/system/multi-user.target", systemd_system.join("default.target").to_str().unwrap()]);
         }
         InstallProfile::GnomeDesktop => {
-            let _ = Command::new("ln").args(["-sf", "/lib/systemd/system/graphical.target", systemd_system.join("default.target").to_str().unwrap()]).status();
+            let _ = run_cmd_quiet("ln", &["-sf", "/lib/systemd/system/graphical.target", systemd_system.join("default.target").to_str().unwrap()]);
         }
     }
 
@@ -443,12 +451,12 @@ LABEL=ESP            /boot/efi  vfat   defaults,noatime                  0 2
 
     // 11. Sync and unmount
     progress_cb("Flushing disk caches and unmounting partitions...", 95);
-    let _ = Command::new("sync").status();
-    let _ = Command::new("umount").arg(&esp_mount).status();
-    let _ = Command::new("umount").arg(target_mount).status();
+    let _ = run_cmd_quiet("sync", &[]);
+    let _ = run_cmd_quiet("umount", &[esp_mount.to_str().unwrap()]);
+    let _ = run_cmd_quiet("umount", &[target_mount.to_str().unwrap()]);
 
     if let Some(_) = payload_source {
-        let _ = Command::new("umount").arg("/run/installer/source").status();
+        let _ = run_cmd_quiet("umount", &["/run/installer/source"]);
     }
 
     progress_cb("Stage 1 Bootstrap successfully completed!", 100);

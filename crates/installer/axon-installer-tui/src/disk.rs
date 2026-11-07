@@ -130,6 +130,8 @@ impl DiskDevice {
             let mut child = Command::new("sfdisk")
                 .arg(&dev_str)
                 .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
                 .spawn()
                 .map_err(|e2| format!("Failed to run sfdisk ({})", e2))?;
 
@@ -145,12 +147,18 @@ impl DiskDevice {
 
         // Wait a moment for udev to populate partition nodes
         std::thread::sleep(std::time::Duration::from_millis(500));
-        let _ = Command::new("partprobe").arg(&dev_str).output();
+        let _ = Command::new("partprobe")
+            .arg(&dev_str)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
         std::thread::sleep(std::time::Duration::from_millis(500));
 
-        // 3. Format ESP (FAT32)
+        // 3. Format ESP (FAT32) silently to prevent corrupting TUI
         let vfat_status = Command::new("mkfs.vfat")
             .args(["-F32", "-n", "ESP", &esp_dev])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .status()
             .map_err(|e| format!("mkfs.vfat failed: {}", e))?;
 
@@ -158,9 +166,11 @@ impl DiskDevice {
             return Err(format!("Formatting ESP {} failed with status {:?}", esp_dev, vfat_status));
         }
 
-        // 4. Format Root with Btrfs (default filesystem per user requirement)
+        // 4. Format Root with Btrfs silently (default filesystem per user requirement)
         let btrfs_status = Command::new("mkfs.btrfs")
             .args(["-f", "-L", "MYELINOS_ROOT", &root_dev])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .status();
 
         match btrfs_status {
@@ -169,6 +179,8 @@ impl DiskDevice {
                 // Graceful fallback to ext4 if btrfs tools are unavailable
                 let ext4_status = Command::new("mkfs.ext4")
                     .args(["-F", "-E", "nodiscard", "-L", "MYELINOS_ROOT", &root_dev])
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
                     .status()
                     .map_err(|e| format!("Both mkfs.btrfs and mkfs.ext4 failed: {}", e))?;
                 if !ext4_status.success() {

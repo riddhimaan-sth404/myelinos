@@ -205,6 +205,7 @@ COMMON_ARGS=(
     ${KVM_ARG}
     -m "${MEMORY}"
     -smp "${SMP}"
+    -no-reboot
     -drive "file=${TARGET_DISK},format=raw,if=virtio"
     "${PAYLOAD_ARG[@]}"
     -device virtio-net-pci
@@ -224,23 +225,32 @@ if [[ "${BOOT_MODE}" == "uefi" ]]; then
     if [[ "${AUTO_MODE}" == "true" ]]; then
         CONSOLE_APPEND="${CONSOLE_APPEND} myelin.auto=1"
     fi
-    exec qemu-system-x86_64 \
+    qemu-system-x86_64 \
         "${COMMON_ARGS[@]}" \
         -bios "${OVMF}" \
         -cdrom "${BOOTSTRAP_ISO}" \
-        -boot d
+        -boot d || true
 else
     if [[ "${ENABLE_GUI}" == "true" ]]; then
-        CONSOLE_APPEND="console=ttyS0 console=tty0 quiet"
+        CONSOLE_APPEND="console=ttyS0 console=tty0 quiet loglevel=0 rd.udev.log_level=0 vt.global_cursor_default=0"
     else
-        CONSOLE_APPEND="console=tty0 console=ttyS0 quiet"
+        CONSOLE_APPEND="console=tty0 console=ttyS0 quiet loglevel=0 rd.udev.log_level=0 vt.global_cursor_default=0"
     fi
     if [[ "${AUTO_MODE}" == "true" ]]; then
         CONSOLE_APPEND="${CONSOLE_APPEND} myelin.auto=1"
     fi
-    exec qemu-system-x86_64 \
+    qemu-system-x86_64 \
         "${COMMON_ARGS[@]}" \
         -kernel "${KERNEL}" \
         -initrd "${BOOTSTRAP_INITRD}" \
-        -append "${CONSOLE_APPEND}"
+        -append "${CONSOLE_APPEND}" || true
 fi
+
+echo ""
+echo "=========================================================="
+echo "✔ MyelinOS Stage 1 Bootstrap Installer execution finished!"
+echo "Target disk: ${TARGET_DISK}"
+echo ""
+echo "Next step: Boot into the target drive to launch Stage 2 GUI:"
+echo "  ./run_system.sh -t -g"
+echo "=========================================================="

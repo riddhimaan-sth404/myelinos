@@ -50,6 +50,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
+        // Ensure terminal size changes are applied dynamically across the entire display
+        let _ = terminal.autoresize();
+
         // Draw UI
         terminal.draw(|f| ui::render(f, &state))?;
 
@@ -89,60 +92,77 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
         }
 
-        // Poll for keyboard events
+        // Poll for keyboard and resize events
         if event::poll(Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
-                    match key.code {
-                        KeyCode::Char('q') => {
-                            if state.current_step != WizardStep::Installing {
-                                break;
-                            }
-                        }
-                        KeyCode::Esc => {
-                            if state.current_step != WizardStep::Installing {
-                                state.prev_step();
-                            }
-                        }
-                        KeyCode::Char('b') => {
-                            if state.current_step != WizardStep::Installing {
-                                state.prev_step();
-                            }
-                        }
-                        KeyCode::Up => {
-                            if state.current_step == WizardStep::DiskSelection {
-                                if state.selected_disk_idx > 0 {
-                                    state.selected_disk_idx -= 1;
+            match event::read()? {
+                Event::Resize(_cols, _rows) => {
+                    let _ = terminal.clear();
+                    let _ = terminal.autoresize();
+                    terminal.draw(|f| ui::render(f, &state))?;
+                }
+                Event::Key(key) => {
+                    if key.kind == KeyEventKind::Press {
+                        match key.code {
+                            KeyCode::Char('q') => {
+                                if state.current_step == WizardStep::Done {
+                                    state.should_quit = true;
+                                    break;
+                                } else if state.current_step != WizardStep::Installing {
+                                    break;
                                 }
-                            } else if state.current_step == WizardStep::ProfileSelection {
-                                state.selected_profile = match state.selected_profile {
-                                    staging::InstallProfile::DeveloperMinimal => staging::InstallProfile::GnomeDesktop,
-                                    staging::InstallProfile::GnomeDesktop => staging::InstallProfile::DeveloperMinimal,
-                                };
                             }
-                        }
-                        KeyCode::Down => {
-                            if state.current_step == WizardStep::DiskSelection {
-                                if state.selected_disk_idx + 1 < state.disks.len() {
-                                    state.selected_disk_idx += 1;
+                            KeyCode::Esc | KeyCode::Char('b') => {
+                                if state.current_step == WizardStep::Done {
+                                    state.should_quit = true;
+                                    break;
+                                } else if state.current_step != WizardStep::Installing {
+                                    state.prev_step();
                                 }
-                            } else if state.current_step == WizardStep::ProfileSelection {
-                                state.selected_profile = match state.selected_profile {
-                                    staging::InstallProfile::DeveloperMinimal => staging::InstallProfile::GnomeDesktop,
-                                    staging::InstallProfile::GnomeDesktop => staging::InstallProfile::DeveloperMinimal,
-                                };
                             }
-                        }
-                        KeyCode::Enter => {
-                            if state.current_step == WizardStep::Done {
-                                break;
-                            } else if state.current_step != WizardStep::Installing {
-                                state.next_step();
+                            KeyCode::Up => {
+                                if state.current_step == WizardStep::DiskSelection {
+                                    if state.selected_disk_idx > 0 {
+                                        state.selected_disk_idx -= 1;
+                                    }
+                                } else if state.current_step == WizardStep::ProfileSelection {
+                                    state.selected_profile = match state.selected_profile {
+                                        staging::InstallProfile::DeveloperMinimal => staging::InstallProfile::GnomeDesktop,
+                                        staging::InstallProfile::GnomeDesktop => staging::InstallProfile::DeveloperMinimal,
+                                    };
+                                }
                             }
+                            KeyCode::Down => {
+                                if state.current_step == WizardStep::DiskSelection {
+                                    if state.selected_disk_idx + 1 < state.disks.len() {
+                                        state.selected_disk_idx += 1;
+                                    }
+                                } else if state.current_step == WizardStep::ProfileSelection {
+                                    state.selected_profile = match state.selected_profile {
+                                        staging::InstallProfile::DeveloperMinimal => staging::InstallProfile::GnomeDesktop,
+                                        staging::InstallProfile::GnomeDesktop => staging::InstallProfile::DeveloperMinimal,
+                                    };
+                                }
+                            }
+                            KeyCode::Enter | KeyCode::Char('\n') | KeyCode::Char('\r') => {
+                                if state.current_step == WizardStep::Done {
+                                    // User confirmed reboot!
+                                    let _ = disable_raw_mode();
+                                    let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
+                                    let _ = terminal.show_cursor();
+                                    println!("\n[+] Stage 1 Bootstrap complete! Rebooting into target disk...");
+                                    let _ = std::process::Command::new("sync").status();
+                                    let _ = std::process::Command::new("reboot").arg("-f").status();
+                                    let _ = std::process::Command::new("/sbin/reboot").arg("-f").status();
+                                    std::process::exit(0);
+                                } else if state.current_step != WizardStep::Installing {
+                                    state.next_step();
+                                }
+                            }
+                            _ => {}
                         }
-                        _ => {}
                     }
                 }
+                _ => {}
             }
         }
     }

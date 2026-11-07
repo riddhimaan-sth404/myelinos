@@ -368,20 +368,24 @@ fn render_installing(frame: &mut Frame, area: Rect, state: &AppState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(4),
+            Constraint::Length(5),
             Constraint::Length(3),
-            Constraint::Min(4),
+            Constraint::Min(6),
         ])
         .split(area);
 
     let info_text = Paragraph::new(vec![
         Line::from(Span::styled("Staging Stage 2 Graphical Installer to Target Disk...", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))),
-        Line::from(Span::raw(&state.progress_status)),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Status: ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::styled(&state.progress_status, Style::default().fg(Color::Yellow)),
+        ]),
     ]).block(block);
     frame.render_widget(info_text, chunks[0]);
 
     let gauge = Gauge::default()
-        .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded))
+        .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(" Progress "))
         .gauge_style(Style::default().fg(Color::Cyan).bg(Color::DarkGray))
         .percent(state.progress_percent)
         .label(format!("{}%", state.progress_percent));
@@ -391,6 +395,29 @@ fn render_installing(frame: &mut Frame, area: Rect, state: &AppState) {
         let err_block = Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Red)).title(" Error Encountered ");
         let err_p = Paragraph::new(err.as_str()).block(err_block).style(Style::default().fg(Color::Red));
         frame.render_widget(err_p, chunks[2]);
+    } else {
+        let details_block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title(" Staging Pipeline Details ")
+            .border_style(Style::default().fg(Color::DarkGray));
+        
+        let p_pct = state.progress_percent;
+        let s1 = if p_pct >= 10 { "✔" } else { "⏳" };
+        let s2 = if p_pct >= 25 { "✔" } else { "⏳" };
+        let s3 = if p_pct >= 70 { "✔" } else { "⏳" };
+        let s4 = if p_pct >= 85 { "✔" } else { "⏳" };
+        let s5 = if p_pct >= 95 { "✔" } else { "⏳" };
+
+        let details_lines = vec![
+            Line::from(vec![Span::styled(format!(" [{}] ", s1), Style::default().fg(if p_pct >= 10 { Color::Green } else { Color::Yellow })), Span::raw("Wipe and partition target drive with GPT, ESP (512MB), and Btrfs root")]),
+            Line::from(vec![Span::styled(format!(" [{}] ", s2), Style::default().fg(if p_pct >= 25 { Color::Green } else { Color::Yellow })), Span::raw("Mount Btrfs root filesystem and stage base operating system payload")]),
+            Line::from(vec![Span::styled(format!(" [{}] ", s3), Style::default().fg(if p_pct >= 70 { Color::Green } else { Color::Yellow })), Span::raw("Install UEFI GRUB 2 bootloader (BOOTX64.EFI) and Linux 7.2 kernel")]),
+            Line::from(vec![Span::styled(format!(" [{}] ", s4), Style::default().fg(if p_pct >= 85 { Color::Green } else { Color::Yellow })), Span::raw("Deploy Stage 2 Graphical Installer and Axon package cache")]),
+            Line::from(vec![Span::styled(format!(" [{}] ", s5), Style::default().fg(if p_pct >= 95 { Color::Green } else { Color::Yellow })), Span::raw("Flush disk caches, seal Stage 1 bootstrap, and unmount partitions")]),
+        ];
+        let details_p = Paragraph::new(details_lines).block(details_block);
+        frame.render_widget(details_p, chunks[2]);
     }
 }
 
@@ -406,18 +433,19 @@ fn render_done(frame: &mut Frame, area: Rect, state: &AppState) {
     let lines = vec![
         Line::from(Span::styled("✔ Stage 1 Bootstrap Successfully Completed!", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))),
         Line::from(""),
-        Line::from(format!("The target disk {} has been partitioned with UEFI GPT + ESP.", selected_disk.device_path.display())),
-        Line::from("The Stage 2 Graphical Installer and base OS payload are sealed on the disk."),
+        Line::from(format!("• Target disk {} has been partitioned with UEFI GPT + ESP.", selected_disk.device_path.display())),
+        Line::from("• Stage 2 Graphical Installer and base OS payload are sealed on the Btrfs drive."),
         Line::from(""),
         Line::from(Span::styled("Next Steps:", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))),
-        Line::from(" 1. Remove the Bootstrap ISO / USB drive."),
+        Line::from(" 1. Remove the Bootstrap ISO / installation medium if booted from USB."),
         Line::from(" 2. Reboot the system into the target hard drive."),
         Line::from(" 3. The Stage 2 Graphical Installer will launch directly into the GNOME session."),
         Line::from(""),
-        Line::from(Span::styled("Press [Enter] or [q] to power off or reboot.", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+        Line::from(Span::styled("▶ Press [Enter] to REBOOT IMMEDIATELY into MyelinOS.", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))),
+        Line::from(Span::styled("▶ Press [q] or [Esc] to exit to rescue shell.", Style::default().fg(Color::DarkGray))),
     ];
 
-    let p = Paragraph::new(lines).block(block);
+    let p = Paragraph::new(lines).block(block).wrap(Wrap { trim: true });
     frame.render_widget(p, area);
 }
 
@@ -458,7 +486,7 @@ fn render_footer(frame: &mut Frame, area: Rect, state: &AppState) {
             Span::styled("[Enter] ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
             Span::raw("Reboot System  │  "),
             Span::styled("[q] ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            Span::raw("Exit"),
+            Span::raw("Exit to Shell"),
         ],
     };
 

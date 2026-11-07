@@ -45,22 +45,20 @@ mount -t devpts devpts /dev/pts 2>/dev/null || true
 mount -t tmpfs tmpfs /run
 mount -t tmpfs tmpfs /tmp
 
+# Silence kernel messages from corrupting console TUI
+echo 0 > /proc/sys/kernel/printk 2>/dev/null || true
+dmesg -n 1 2>/dev/null || true
+
 # Mount live medium if available
 if [ -e /dev/sr0 ]; then
     mount -t iso9660 -o ro /dev/sr0 /run/installer/medium 2>/dev/null || true
 fi
 
-echo "=========================================================="
-echo " Starting MyelinOS Bootstrap Installer (Stage 1 TUI)..."
-echo "=========================================================="
-sleep 1
-
-# Configure console geometry if not set
-stty cols 100 rows 30 2>/dev/null || true
-
-# Spawn serial helper shell on ttyS0 in background if present
-if [ -e /dev/ttyS0 ]; then
-    ( while true; do /bin/sh < /dev/ttyS0 > /dev/ttyS0 2>&1; done ) &
+# Detect console geometry dynamically so TUI fills the full terminal window
+resize 2>/dev/null || true
+CUR_SIZE=$(stty size 2>/dev/null || echo "")
+if [ -z "$CUR_SIZE" ] || [ "$CUR_SIZE" = "0 0" ]; then
+    stty cols 128 rows 40 2>/dev/null || true
 fi
 
 # Launch the interactive Rust TUI installer with controlling tty
@@ -69,23 +67,30 @@ if grep -q -E "(myelin\\.auto|unattended|installer\\.auto)" /proc/cmdline 2>/dev
     AUTO_FLAG="--auto"
 fi
 
+BOOTSTRAP_EXIT=0
 if [ -x /bin/axon-bootstrap ]; then
     setsid cttyhack /bin/axon-bootstrap $AUTO_FLAG
+    BOOTSTRAP_EXIT=$?
 elif [ -x /usr/bin/axon-bootstrap ]; then
     setsid cttyhack /usr/bin/axon-bootstrap $AUTO_FLAG
+    BOOTSTRAP_EXIT=$?
 else
     echo "[-] Error: axon-bootstrap binary missing!"
     exec /bin/sh
 fi
 
-echo ""
-echo "[*] Installation wizard finished. Dropping to rescue shell or poweroff."
-echo "Type 'reboot' to boot into the target disk, or 'poweroff' to halt."
-if [ -n "$AUTO_FLAG" ]; then
-    echo "[+] Automated installation completed successfully! Shutting down in 2 seconds..."
-    sleep 2
-    poweroff -f
+# If automated mode was active OR installer requested reboot (exit code 0)
+if [ -n "$AUTO_FLAG" ] || [ "$BOOTSTRAP_EXIT" -eq 0 ]; then
+    echo ""
+    echo "[+] Rebooting system into target hard drive..."
+    sync
+    sleep 1
+    reboot -f 2>/dev/null || poweroff -f
 fi
+
+echo ""
+echo "[*] Installation wizard finished. Dropping to rescue shell."
+echo "Type 'reboot' to boot into the target disk, or 'poweroff' to halt."
 exec setsid cttyhack /bin/sh
 """
 
@@ -98,17 +103,17 @@ set default="0"
 set timeout=1
 
 menuentry "Install MyelinOS (Stage 1 TUI Bootstrap - Graphical / VGA)" {
-    linux /boot/vmlinuz console=ttyS0 console=tty0 quiet
+    linux /boot/vmlinuz console=ttyS0 console=tty0 quiet loglevel=0 rd.udev.log_level=0 vt.global_cursor_default=0
     initrd /boot/initrd.img
 }
 
 menuentry "Install MyelinOS (Serial Console Headless)" {
-    linux /boot/vmlinuz console=tty0 console=ttyS0 quiet
+    linux /boot/vmlinuz console=tty0 console=ttyS0 quiet loglevel=0 rd.udev.log_level=0 vt.global_cursor_default=0
     initrd /boot/initrd.img
 }
 
 menuentry "Install MyelinOS (Automated Stage 1 Bootstrap)" {
-    linux /boot/vmlinuz console=ttyS0 console=tty0 myelin.auto=1 quiet
+    linux /boot/vmlinuz console=ttyS0 console=tty0 myelin.auto=1 quiet loglevel=0 rd.udev.log_level=0 vt.global_cursor_default=0
     initrd /boot/initrd.img
 }
 """
@@ -173,7 +178,7 @@ def build_initramfs():
             "sh", "bash", "mount", "umount", "mkdir", "rmdir", "sleep", "echo",
             "cat", "ls", "ps", "kill", "mknod", "blkid", "grep", "sed", "awk",
             "cp", "mv", "rm", "find", "uname", "sync", "poweroff", "reboot",
-            "clear", "reset", "setsid", "cttyhack", "stty"
+            "clear", "reset", "setsid", "cttyhack", "stty", "resize"
         ]:
             (root / "bin" / app).symlink_to("busybox")
             (root / "sbin" / app).symlink_to("../bin/busybox")
