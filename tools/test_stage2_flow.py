@@ -122,7 +122,7 @@ def convert_ppm_to_png(ppm_path: Path, png_path: Path):
 
 def find_suggested_button(img_path: Path, is_final: bool = False):
     if not img_path.exists():
-        return (-1, -1) if is_final else (880, 773)
+        return (-1, -1) if is_final else (640, 715)
     im = Image.open(img_path)
     pixels = im.load()
     w, h = im.size
@@ -130,38 +130,35 @@ def find_suggested_button(img_path: Path, is_final: bool = False):
     if is_final:
         # Check if the bottom action bar is still present (if so, we are NOT on the final screen yet)
         pts_action_bar = []
-        for y in range(740, min(h, 795)):
-            for x in range(750, min(w, 1260)):
+        for y in range(h - 100, h - 5):
+            for x in range(100, w - 100):
                 r, g, b = pixels[x, y][:3]
-                if (35 <= r <= 100 and 100 <= g <= 170 and 190 <= b <= 255) or (r > 200 and g > 200 and b > 200):
+                if (b > 170 and r < 120 and g < 180) and abs(x - 640) > 200:
                     pts_action_bar.append((x, y))
-        if len(pts_action_bar) > 40:
+        if len(pts_action_bar) > 50:
             return (-1, -1)
 
-        # Search for centered Reboot button in done_box (centered horizontally at 450..830, y between 200..750)
+        # Search for centered Reboot button in done_box (centered horizontally at 400..880, y between 350..750)
         pts = []
-        for y in range(200, 750):
-            for x in range(450, 830):
+        for y in range(350, 750):
+            for x in range(400, 880):
                 r, g, b = pixels[x, y][:3]
-                if 35 <= r <= 100 and 100 <= g <= 170 and 190 <= b <= 255:
+                if b > 170 and r < 120 and g < 180:
                     pts.append((x, y))
         if len(pts) > 80:
             min_x = min(p[0] for p in pts)
             max_x = max(p[0] for p in pts)
             min_y = min(p[1] for p in pts)
             max_y = max(p[1] for p in pts)
-            center_x = (min_x + max_x) // 2
-            center_y = (min_y + max_y) // 2
-            if abs(center_x - 640) < 140 and 18 <= (max_y - min_y) <= 85:
-                return (center_x, center_y)
+            return ((min_x + max_x) // 2, (min_y + max_y) // 2)
         return (-1, -1)
     else:
-        # Search for Next / Install & Seal button in the bottom-right ActionBar (x in 750..1260, y in 740..795)
+        # Search for Next / Install & Seal button in the bottom section
         pts = []
-        for y in range(740, min(h, 795)):
-            for x in range(750, min(w, 1260)):
+        for y in range(h - 140, h - 10):
+            for x in range(100, w - 100):
                 r, g, b = pixels[x, y][:3]
-                if 35 <= r <= 100 and 100 <= g <= 170 and 190 <= b <= 255:
+                if b > 170 and r < 120 and g < 180:
                     pts.append((x, y))
 
         if pts and len(pts) > 40:
@@ -170,7 +167,7 @@ def find_suggested_button(img_path: Path, is_final: bool = False):
             min_y = min(p[1] for p in pts)
             max_y = max(p[1] for p in pts)
             return ((min_x + max_x) // 2, (min_y + max_y) // 2)
-        return (880, 773)
+        return (640, 715)
 
 def click_suggested_action(qmp, img_path: Path, is_final: bool = False, send_enter: bool = True):
     cx, cy = find_suggested_button(img_path, is_final=is_final)
@@ -200,6 +197,7 @@ def main():
         "-device", "virtio-vga",
         "-device", "virtio-tablet-pci",
         "-device", "intel-hda", "-device", "hda-duplex",
+        "-serial", "file:/tmp/stage2-qemu-serial.log",
         "-display", "none",
         "-vnc", ":3",
         "-qmp", f"unix:{QMP_SOCK},server,nowait",

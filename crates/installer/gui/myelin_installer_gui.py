@@ -20,6 +20,11 @@ import json
 import traceback
 from pathlib import Path
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(line_buffering=True)
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(line_buffering=True)
+
 import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
@@ -28,8 +33,15 @@ from gi.repository import Gtk, Gdk, Adw, GLib, Gio
 def log(msg):
     ts = time.strftime("%Y-%m-%d %H:%M:%S")
     line = f"[{ts}] {msg}\n"
-    print(line, end="")
-    for p in ["/home/myelinos/myelin-installer.log", "/tmp/myelin-installer.log", "/var/log/myelin-installer.log"]:
+    print(line, end="", flush=True)
+    for p in [
+        "/home/myelinos/installer.log",
+        "/tmp/myelin-installer.log",
+        "/var/log/myelin-installer.log",
+        "/dev/console",
+        "/dev/tty1",
+        "/dev/ttyS0",
+    ]:
         try:
             with open(p, "a") as f:
                 f.write(line)
@@ -190,10 +202,12 @@ def check_internet():
 
 class MyelinInstallerWindow(Adw.ApplicationWindow):
     def __init__(self, app):
+        log("MyelinInstallerWindow.__init__ entering...")
         super().__init__(application=app, title="MyelinOS Installer (Stage 2)")
         self.set_default_size(1280, 800)
         self.set_size_request(760, 540)
 
+        # Enforce full-screen kiosk mode covering the entire display
         self.fullscreen()
         self.maximize()
         self.set_deletable(False)
@@ -205,7 +219,6 @@ class MyelinInstallerWindow(Adw.ApplicationWindow):
         self.add_controller(key_controller)
 
         Adw.StyleManager.get_default().set_color_scheme(Adw.ColorScheme.FORCE_DARK)
-        self.lock_desktop()
 
         # Main Box
         main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
@@ -249,7 +262,9 @@ class MyelinInstallerWindow(Adw.ApplicationWindow):
 
         self.step = 0
         self.preset_checkboxes = {}
+        log("MyelinInstallerWindow: building pages...")
         self.build_pages()
+        log("MyelinInstallerWindow.__init__ completed.")
 
     def on_key_pressed(self, controller, keyval, keycode, state):
         # Prevent escaping fullscreen kiosk mode
@@ -823,6 +838,33 @@ X-Myelin-Preset={preset['id']}
                 except Exception as e:
                     log(f"Failed to write launcher for {app_title}: {e}")
 
+        # Install GNOME Desktop Environment and applications if desktop preset selected
+        is_headless = len(selected_presets) == 1 and selected_presets[0]["id"] == "minimal_hardened"
+        if not is_headless:
+            log("[*] Installing GNOME Desktop Environment and applications from package cache...")
+            staged_gnome = Path("/var/cache/myelin/staged_gnome")
+            if staged_gnome.exists():
+                staged_bin = staged_gnome / "bin"
+                if staged_bin.exists():
+                    for f in staged_bin.iterdir():
+                        dest = Path("/usr/bin") / f.name
+                        subprocess.run(["sudo", "mv", "-f", str(f), str(dest)], check=False)
+                        subprocess.run(["sudo", "chmod", "755", str(dest)], check=False)
+                staged_apps = staged_gnome / "applications"
+                if staged_apps.exists():
+                    for f in staged_apps.iterdir():
+                        dest = app_dir / f.name
+                        subprocess.run(["sudo", "mv", "-f", str(f), str(dest)], check=False)
+                staged_sessions = staged_gnome / "sessions"
+                if staged_sessions.exists():
+                    session_dir = Path("/usr/share/wayland-sessions")
+                    session_dir.mkdir(parents=True, exist_ok=True)
+                    for f in staged_sessions.iterdir():
+                        dest = session_dir / f.name
+                        subprocess.run(["sudo", "mv", "-f", str(f), str(dest)], check=False)
+                subprocess.run(["sudo", "rm", "-rf", str(staged_gnome)], check=False)
+                installed_packages.append("gnome-desktop")
+
         # Update desktop database
         subprocess.run(["sudo", "update-desktop-database", str(app_dir)], check=False)
         subprocess.run(["sudo", "chown", "-R", f"{username}:{username}", f"/home/{username}"], check=False)
@@ -855,26 +897,26 @@ X-Myelin-Preset={preset['id']}
         log(f"seal_generation: Generation 1 sealed with {len(all_pkgs)} packages; /var/lib/myelin/installed created.")
 
     def finalize_boot(self, username, autologin, selected_presets):
-        log(f"finalize_boot: cleaning autostart and restoring gnome-session for user {username}...")
-        # 1. Permanently remove installer desktop entries & script
+        log(f"finalize_boot: removing installer service and configuring display manager for user {username}...")
+        # 1. Permanently remove installer services and files
+        subprocess.run(["sudo", "systemctl", "disable", "myelin-installer.service"], check=False)
+        subprocess.run(["sudo", "rm", "-f", "/etc/systemd/system/myelin-installer.service"], check=False)
+        subprocess.run(["sudo", "rm", "-f", "/etc/systemd/system/graphical.target.wants/myelin-installer.service"], check=False)
+
         for p in [
+            "/usr/share/wayland-sessions/myelin-installer.desktop",
+            "/usr/bin/myelin-installer-session",
             "/etc/xdg/autostart/org.myelinos.Installer.desktop",
             "/home/myelinos/.config/autostart/org.myelinos.Installer.desktop",
             f"/home/{username}/.config/autostart/org.myelinos.Installer.desktop",
             "/usr/bin/myelin-installer-gui",
-            "/etc/systemd/user/myelin-installer.service",
-            "/etc/systemd/user/default.target.wants/myelin-installer.service",
-            "/etc/systemd/user/graphical-session.target.wants/myelin-installer.service",
         ]:
             subprocess.run(["sudo", "rm", "-f", p], check=False)
 
         if Path("/usr/bin/gnome-session-real").exists():
             subprocess.run(["sudo", "mv", "-f", "/usr/bin/gnome-session-real", "/usr/bin/gnome-session"], check=False)
-            log("finalize_boot: /usr/bin/gnome-session-real restored to /usr/bin/gnome-session")
-
         if Path("/usr/bin/gnome-shell-real").exists():
             subprocess.run(["sudo", "mv", "-f", "/usr/bin/gnome-shell-real", "/usr/bin/gnome-shell"], check=False)
-            log("finalize_boot: /usr/bin/gnome-shell-real restored to /usr/bin/gnome-shell")
 
         # 2. Update /etc/gdm/custom.conf to transition from installer live user to real user
         gdm_conf = f"""# GDM configuration for MyelinOS (Sealed Generation 1)
@@ -890,13 +932,25 @@ InitialSetupEnable=false
 """
         subprocess.run(["sudo", "sh", "-c", f"cat << 'EOF' > /etc/gdm/custom.conf\n{gdm_conf}\nEOF"], check=False)
 
-        # 3. If minimal headless only, switch systemd default target to multi-user
-        if len(selected_presets) == 1 and selected_presets[0]["id"] == "minimal_hardened":
-            subprocess.run(["sudo", "systemctl", "set-default", "multi-user.target"], check=False)
-        else:
-            subprocess.run(["sudo", "systemctl", "set-default", "graphical.target"], check=False)
+        # 3. Configure AccountsService session for the real user
+        acc_user = Path(f"/var/lib/AccountsService/users/{username}")
+        if acc_user.parent.exists():
+            acc_conf = "[User]\nSession=gnome\nXSession=gnome\nSystemAccount=false\n"
+            subprocess.run(["sudo", "sh", "-c", f"cat << 'EOF' > {acc_user}\n{acc_conf}\nEOF"], check=False)
+        acc_myelinos = Path("/var/lib/AccountsService/users/myelinos")
+        if acc_myelinos.exists():
+            subprocess.run(["sudo", "rm", "-f", str(acc_myelinos)], check=False)
 
-        # 4. Re-enable standard GNOME shortcuts for user session
+        # 4. Enable GDM for production desktop unless headless
+        is_headless = len(selected_presets) == 1 and selected_presets[0]["id"] == "minimal_hardened"
+        if not is_headless:
+            subprocess.run(["sudo", "systemctl", "enable", "gdm.service"], check=False)
+            subprocess.run(["sudo", "ln", "-sf", "/usr/lib/systemd/system/gdm.service", "/etc/systemd/system/display-manager.service"], check=False)
+            subprocess.run(["sudo", "systemctl", "set-default", "graphical.target"], check=False)
+        else:
+            subprocess.run(["sudo", "systemctl", "set-default", "multi-user.target"], check=False)
+
+        # 5. Re-enable standard GNOME shortcuts for user session
         try:
             subprocess.run(["gsettings", "reset", "org.gnome.mutter", "overlay-key"], check=False)
             subprocess.run(["gsettings", "reset", "org.gnome.desktop.wm.keybindings", "switch-applications"], check=False)
@@ -919,13 +973,19 @@ class MyelinInstallerApp(Adw.Application):
         super().__init__(application_id="org.myelinos.Installer", flags=Gio.ApplicationFlags.NON_UNIQUE)
         self.connect("activate", self.on_activate)
 
+    def do_activate(self):
+        self.on_activate(self)
+
     def on_activate(self, app):
         try:
+            log("MyelinInstallerApp.on_activate called!")
             win = self.props.active_window
             if not win:
+                log("on_activate: instantiating MyelinInstallerWindow...")
                 win = MyelinInstallerWindow(self)
+            log("on_activate: presenting window...")
             win.present()
-            GLib.idle_add(win.fullscreen)
+            log("on_activate: window present() completed successfully.")
         except Exception as e:
             log(f"Error in on_activate: {e}\n{traceback.format_exc()}")
 

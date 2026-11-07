@@ -358,6 +358,63 @@ where
         }
     }
 
+    // 8. Stash GNOME Applications & Configure Stage 2 Kiosk Environment
+    // Only the Stage 2 GUI installer kiosk runs. Desktop applications (Nautilus, Ptyxis, etc.)
+    // are staged in /var/cache/myelin/staged_gnome and only installed when presets are selected.
+    let staged_gnome_dir = target_mount.join("var/cache/myelin/staged_gnome");
+    let staged_gnome_bin = staged_gnome_dir.join("bin");
+    let staged_gnome_apps = staged_gnome_dir.join("applications");
+    let staged_gnome_sessions = staged_gnome_dir.join("sessions");
+    let _ = fs::create_dir_all(&staged_gnome_bin);
+    let _ = fs::create_dir_all(&staged_gnome_apps);
+    let _ = fs::create_dir_all(&staged_gnome_sessions);
+
+    let target_bin = target_mount.join("usr/bin");
+    if let Ok(entries) = fs::read_dir(&target_bin) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            // Stash all non-core user apps (keep gnome-shell, gnome-session for compositor runtime)
+            if (name.starts_with("gnome-") && name != "gnome-shell" && name != "gnome-session")
+                || name == "nautilus"
+                || name == "ptyxis"
+                || name == "start-gnome"
+            {
+                let _ = fs::rename(entry.path(), staged_gnome_bin.join(&name));
+            }
+        }
+    }
+
+    let target_apps = target_mount.join("usr/share/applications");
+    if let Ok(entries) = fs::read_dir(&target_apps) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with("org.gnome.") || name.starts_with("gnome-") || name.starts_with("io.github.") {
+                let _ = fs::rename(entry.path(), staged_gnome_apps.join(&name));
+            }
+        }
+    }
+
+    let target_sessions = target_mount.join("usr/share/wayland-sessions");
+    let _ = fs::create_dir_all(&target_sessions);
+    if let Ok(entries) = fs::read_dir(&target_sessions) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with("gnome") {
+                let _ = fs::rename(entry.path(), staged_gnome_sessions.join(&name));
+            }
+        }
+    }
+
+    let target_xsessions = target_mount.join("usr/share/xsessions");
+    if let Ok(entries) = fs::read_dir(&target_xsessions) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with("gnome") {
+                let _ = fs::rename(entry.path(), staged_gnome_sessions.join(&name));
+            }
+        }
+    }
+
     // Configure GNOME Shell initial-setup kiosk mode (completely empty panel, no overview, no dash)
     let modes_dir = target_mount.join("usr/share/gnome-shell/modes");
     let _ = fs::create_dir_all(&modes_dir);
@@ -373,7 +430,7 @@ where
 "#;
     let _ = fs::write(modes_dir.join("initial-setup.json"), initial_setup_mode);
 
-    // Ensure GNOME Shell runs in initial-setup kiosk mode while installation is pending
+    // Wrap gnome-shell to enforce initial-setup kiosk mode until generation is sealed
     let gnome_shell = target_mount.join("usr/bin/gnome-shell");
     let gnome_shell_real = target_mount.join("usr/bin/gnome-shell-real");
     if gnome_shell.exists() && !gnome_shell_real.exists() {
@@ -393,39 +450,111 @@ fi
         let _ = fs::set_permissions(&gnome_shell, perms);
     }
 
-    // Ensure Stage 2 GUI launches reliably upon graphical desktop initialization
-    let gnome_session = target_mount.join("usr/bin/gnome-session");
-    let gnome_session_real = target_mount.join("usr/bin/gnome-session-real");
-    if gnome_session.exists() && !gnome_session_real.exists() {
-        let _ = fs::rename(&gnome_session, &gnome_session_real);
+    // Ensure /home/myelinos/installer.log is writable by myelinos live user
+    let log_file = target_mount.join("home/myelinos/installer.log");
+    let _ = fs::write(&log_file, "");
+    if let Ok(meta) = fs::metadata(&log_file) {
+        let mut perms = meta.permissions();
+        perms.set_mode(0o666);
+        let _ = fs::set_permissions(&log_file, perms);
     }
-    let wrapper_script = r#"#!/bin/bash
-if [ ! -f /var/lib/myelin/installed ] && [ -x /usr/bin/myelin-installer-gui ]; then
-    (
-        for i in $(seq 1 60); do
-            if [ -S "/run/user/$(id -u)/wayland-0" ]; then break; fi
-            sleep 0.5
-        done
-        sleep 1.0
-        export WAYLAND_DISPLAY=wayland-0
-        export XDG_RUNTIME_DIR="/run/user/$(id -u)"
-        export GSK_RENDERER=cairo
-        export GDK_BACKEND=wayland
-        /usr/bin/python3 /usr/bin/myelin-installer-gui >> /tmp/myelin-installer.log 2>&1
-    ) &
-fi
-if [ -x /usr/bin/gnome-session-real ]; then
-    exec /usr/bin/gnome-session-real "$@"
-else
-    exec /usr/bin/gnome-shell --mode=initial-setup
-fi
+    let _ = run_cmd_quiet("chown", &["-R", "1000:1000", target_mount.join("home/myelinos").to_str().unwrap()]);
+
+    // Write dedicated Stage 2 session wrapper
+    let session_wrapper = r#"#!/bin/bash
+export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+export WAYLAND_DISPLAY=wayland-0
+export GSK_RENDERER=cairo
+export GDK_BACKEND=wayland
+export XDG_CURRENT_DESKTOP=GNOME
+export XDG_SESSION_TYPE=wayland
+export PYTHONUNBUFFERED=1
+
+# Helper subshell that waits for GNOME Shell Wayland display server to be ready
+(
+    COUNT=0
+    while [ ! -S "$XDG_RUNTIME_DIR/wayland-0" ] && [ $COUNT -lt 150 ]; do
+        sleep 0.1
+        COUNT=$((COUNT + 1))
+    done
+    sleep 0.8
+    /usr/bin/python3 -u /usr/bin/myelin-installer-gui 2>&1 | tee -a /home/myelinos/installer.log /tmp/myelin-installer.log > /dev/console
+) &
+
+exec /usr/bin/gnome-shell --wayland --display-server --mode=initial-setup
 "#;
-    let _ = fs::write(&gnome_session, wrapper_script);
-    if let Ok(meta) = fs::metadata(&gnome_session) {
+    let session_bin = target_mount.join("usr/bin/myelin-installer-session");
+    let _ = fs::write(&session_bin, session_wrapper);
+    if let Ok(meta) = fs::metadata(&session_bin) {
         let mut perms = meta.permissions();
         perms.set_mode(0o755);
-        let _ = fs::set_permissions(&gnome_session, perms);
+        let _ = fs::set_permissions(&session_bin, perms);
     }
+
+    // Write dedicated Wayland session desktop file so GDM launches installer kiosk
+    let installer_desktop = r#"[Desktop Entry]
+Name=MyelinOS Installer
+Comment=Stage 2 GUI Installer Kiosk
+Exec=/usr/bin/myelin-installer-session
+TryExec=/usr/bin/myelin-installer-session
+Type=Application
+DesktopNames=GNOME
+"#;
+    let _ = fs::write(target_sessions.join("myelin-installer.desktop"), installer_desktop);
+
+    // Configure GDM for automatic login of myelinos live user into installer kiosk
+    let gdm_custom_conf = r#"# GDM configuration for MyelinOS Stage 2 Installer Kiosk
+[daemon]
+AutomaticLoginEnable=True
+AutomaticLogin=myelinos
+WaylandEnable=true
+
+[security]
+
+[xdmcp]
+
+[chooser]
+
+[debug]
+"#;
+    let gdm_dir = target_mount.join("etc/gdm");
+    let _ = fs::create_dir_all(&gdm_dir);
+    let _ = fs::write(gdm_dir.join("custom.conf"), gdm_custom_conf);
+
+    let gdm3_dir = target_mount.join("etc/gdm3");
+    if gdm3_dir.exists() {
+        let _ = fs::write(gdm3_dir.join("custom.conf"), gdm_custom_conf);
+    }
+
+    // Configure AccountsService default session for myelinos user
+    let act_user_dir = target_mount.join("var/lib/AccountsService/users");
+    let _ = fs::create_dir_all(&act_user_dir);
+    let act_conf = "[User]\nSession=myelin-installer\nXSession=myelin-installer\nSystemAccount=false\n";
+    let _ = fs::write(act_user_dir.join("myelinos"), act_conf);
+
+    // Enable GDM service and graphical target
+    let systemd_system = target_mount.join("etc/systemd/system");
+    let _ = fs::create_dir_all(&systemd_system);
+
+    let gdm_target = if target_mount.join("usr/lib/systemd/system/gdm.service").exists() {
+        "/usr/lib/systemd/system/gdm.service"
+    } else {
+        "/lib/systemd/system/gdm.service"
+    };
+
+    let dm_symlink = systemd_system.join("display-manager.service");
+    let _ = fs::remove_file(&dm_symlink);
+    let _ = std::os::unix::fs::symlink(gdm_target, &dm_symlink);
+
+    let graphical_wants = systemd_system.join("graphical.target.wants");
+    let _ = fs::create_dir_all(&graphical_wants);
+    let _ = fs::remove_file(graphical_wants.join("gdm.service"));
+    let _ = std::os::unix::fs::symlink(gdm_target, graphical_wants.join("gdm.service"));
+
+    // Remove legacy myelin-installer system service if present
+    let _ = fs::remove_file(systemd_system.join("myelin-installer.service"));
+    let _ = fs::remove_file(graphical_wants.join("myelin-installer.service"));
+    let _ = fs::remove_file(systemd_system.join("multi-user.target.wants/myelin-installer.service"));
 
     // Install XDG desktop autostart entry for Stage 2 GUI
     let autostart_dir = target_mount.join("etc/xdg/autostart");
