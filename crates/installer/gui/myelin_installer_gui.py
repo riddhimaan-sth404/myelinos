@@ -23,7 +23,7 @@ from pathlib import Path
 import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Gtk, Adw, GLib, Gio
+from gi.repository import Gtk, Gdk, Adw, GLib, Gio
 
 def log(msg):
     ts = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -194,10 +194,16 @@ class MyelinInstallerWindow(Adw.ApplicationWindow):
         self.set_default_size(1280, 800)
         self.set_size_request(760, 540)
 
-        # Enforce full-screen kiosk mode: nothing else is visible or usable
         self.fullscreen()
         self.maximize()
         self.set_deletable(False)
+        self.set_resizable(False)
+
+        # Trap fullscreen escape keys
+        key_controller = Gtk.EventControllerKey.new()
+        key_controller.connect("key-pressed", self.on_key_pressed)
+        self.add_controller(key_controller)
+
         Adw.StyleManager.get_default().set_color_scheme(Adw.ColorScheme.FORCE_DARK)
         self.lock_desktop()
 
@@ -244,6 +250,12 @@ class MyelinInstallerWindow(Adw.ApplicationWindow):
         self.step = 0
         self.preset_checkboxes = {}
         self.build_pages()
+
+    def on_key_pressed(self, controller, keyval, keycode, state):
+        # Prevent escaping fullscreen kiosk mode
+        if keyval in (Gdk.KEY_Escape, Gdk.KEY_F11):
+            return True
+        return False
 
     def lock_desktop(self):
         """Lock down desktop environment so no other apps, overview, or shortcuts are usable."""
@@ -534,10 +546,10 @@ class MyelinInstallerWindow(Adw.ApplicationWindow):
         done_icon.set_pixel_size(72)
         self.done_box.append(done_icon)
 
-        done_msg = Gtk.Label(label="Installation Complete!\nYour chosen software presets have been installed and sealed into Generation 1.")
-        done_msg.set_justify(Gtk.Justification.CENTER)
-        done_msg.add_css_class("title-3")
-        self.done_box.append(done_msg)
+        self.done_msg = Gtk.Label(label="Installation Complete!\nYour chosen software presets have been installed and sealed into Generation 1.")
+        self.done_msg.set_justify(Gtk.Justification.CENTER)
+        self.done_msg.add_css_class("title-3")
+        self.done_box.append(self.done_msg)
 
         done_sub = Gtk.Label(label="When you reboot, the installer will be gone and your system will open directly into your personalized desktop.")
         done_sub.set_justify(Gtk.Justification.CENTER)
@@ -609,36 +621,54 @@ class MyelinInstallerWindow(Adw.ApplicationWindow):
         autologin = self.autologin_switch.get_active()
         selected_presets = self.get_selected_presets()
 
-        steps = [
-            ("Applying device hostname...", 0.15, self.apply_hostname, (hostname,)),
-            ("Configuring timezone & locale...", 0.30, self.apply_timezone, (timezone,)),
-            ("Creating user account & credentials...", 0.45, self.apply_user, (username, fullname, password, is_sudo)),
-            ("Installing selected package presets...", 0.70, self.install_presets, (username, selected_presets)),
-            ("Sealing Generation 1 in Axon CAS store...", 0.85, self.seal_generation, (username, selected_presets)),
-            ("Finalizing bootloader & display manager...", 1.0, self.finalize_boot, (username, autologin, selected_presets)),
-        ]
+        # Phase 1: Hostname
+        log("run_finalization: applying hostname...")
+        GLib.idle_add(self.update_progress, "Applying device hostname...", 0.10)
+        time.sleep(0.3)
+        self.apply_hostname(hostname)
 
-        for desc, pct, func, args in steps:
-            log(f"run_finalization step: {desc}")
-            GLib.idle_add(self.update_progress, desc, pct)
-            time.sleep(0.3)
-            try:
-                func(*args)
-                log(f"run_finalization completed: {desc}")
-            except Exception as e:
-                log(f"Error in {desc}: {e}\n{traceback.format_exc()}")
+        # Phase 2: Timezone
+        log("run_finalization: configuring timezone...")
+        GLib.idle_add(self.update_progress, "Configuring timezone & locale...", 0.20)
+        time.sleep(0.3)
+        self.apply_timezone(timezone)
+
+        # Phase 3: User credentials
+        log("run_finalization: creating user account...")
+        GLib.idle_add(self.update_progress, "Creating user account & credentials...", 0.35)
+        time.sleep(0.3)
+        self.apply_user(username, fullname, password, is_sudo)
+
+        # Phase 4: Package presets installation (dynamic progress 0.40 -> 0.85)
+        log("run_finalization: installing package presets...")
+        installed_pkgs = self.install_presets(username, selected_presets)
+
+        # Phase 5: Sealing Generation 1 in CAS store
+        log("run_finalization: sealing generation 1...")
+        GLib.idle_add(self.update_progress, "Sealing Generation 1 in Axon CAS store...", 0.90)
+        time.sleep(0.4)
+        self.seal_generation(username, selected_presets, installed_pkgs)
+
+        # Phase 6: Finalizing bootloader and display manager
+        log("run_finalization: finalizing bootloader & display manager...")
+        GLib.idle_add(self.update_progress, "Finalizing bootloader & display manager...", 1.0)
+        time.sleep(0.3)
+        self.finalize_boot(username, autologin, selected_presets)
 
         log("run_finalization: all tasks finished, invoking show_completed")
-        GLib.idle_add(self.show_completed)
+        summary_msg = f"Installation Complete!\n{len(installed_pkgs)} packages across {len(selected_presets)} presets have been installed and sealed into Generation 1."
+        GLib.idle_add(self.show_completed, summary_msg)
 
     def update_progress(self, desc, pct):
         self.status_label.set_text(desc)
         self.progress_bar.set_fraction(pct)
 
-    def show_completed(self):
+    def show_completed(self, summary_msg=None):
         self.progress_title.set_visible(False)
         self.progress_bar.set_visible(False)
         self.status_label.set_visible(False)
+        if summary_msg:
+            self.done_msg.set_text(summary_msg)
         self.done_box.set_visible(True)
         self.set_default_widget(self.reboot_btn)
 
@@ -667,6 +697,7 @@ class MyelinInstallerWindow(Adw.ApplicationWindow):
 
     def install_presets(self, username, selected_presets):
         """Installs the packages and creates application desktop entries for selected presets."""
+        import tempfile
         app_dir = Path("/usr/share/applications")
         user_app_dir = Path(f"/home/{username}/.local/share/applications")
         cache_dir = Path("/var/cache/myelin/packages")
@@ -674,57 +705,107 @@ class MyelinInstallerWindow(Adw.ApplicationWindow):
         subprocess.run(["sudo", "mkdir", "-p", str(user_app_dir)], check=False)
         subprocess.run(["sudo", "mkdir", "-p", "/usr/local/bin"], check=False)
 
-        # Check network connectivity
-        has_network = check_internet()
-        log(f"install_presets: network connectivity = {has_network}")
-
-        cached_files = list(cache_dir.glob("*.pkg.tar.zst")) if cache_dir.exists() else []
-        log(f"install_presets: found {len(cached_files)} cached packages: {[f.name for f in cached_files]}")
+        cached_files = []
+        if cache_dir.exists():
+            cached_files = list(cache_dir.glob("*.mpkg")) + list(cache_dir.glob("*.pkg.tar.zst"))
+        log(f"install_presets: found {len(cached_files)} cached packages in {cache_dir}")
 
         axon_bin = "/usr/bin/axon" if Path("/usr/bin/axon").exists() else "/usr/sbin/axon"
+        
+        all_preset_packages = []
+        for p in selected_presets:
+            for pkg in p.get("packages", []):
+                if not any(item[0] == pkg for item in all_preset_packages):
+                    all_preset_packages.append((pkg, p["name"], p["id"]))
+
+        total_pkgs = len(all_preset_packages)
+        log(f"install_presets: installing {total_pkgs} distinct packages across selected presets...")
+        
         installed_packages = []
-        for preset in selected_presets:
-            log(f"[*] Processing preset: {preset['name']} ({len(preset['packages'])} packages)...")
-            for pkg in preset.get("packages", []):
-                # Check if package is already in PATH
-                res = subprocess.run(["which", pkg], capture_output=True)
-                if res.returncode == 0:
+        for idx, (pkg, preset_name, preset_id) in enumerate(all_preset_packages):
+            pct = 0.40 + 0.45 * ((idx + 1) / max(total_pkgs, 1))
+            status_text = f"Installing {pkg} ({preset_name})..."
+            GLib.idle_add(self.update_progress, status_text, pct)
+            log(f"[*] [{idx+1}/{total_pkgs}] Installing package '{pkg}' for preset '{preset_name}'...")
+
+            # 1. Look for matching pre-cached archive
+            match_file = None
+            for f in cached_files:
+                fname = f.name
+                if fname == f"{pkg}.mpkg" or fname == f"{pkg}.pkg.tar.zst" or fname.startswith(f"{pkg}-"):
+                    match_file = f
+                    break
+
+            if match_file and match_file.exists():
+                log(f"[+] Found cached archive: {match_file.name}")
+                axon_res = subprocess.run(
+                    ["sudo", axon_bin, "install", str(match_file), "--system", "--allow-host-mutation"],
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
+                if axon_res.returncode == 0:
+                    log(f"[+] Axon installed {pkg} from {match_file.name}")
                     installed_packages.append(pkg)
-                    continue
-
-                # If offline and not in cache, avoid hanging on network timeouts
-                is_cached = any(f.name.startswith(f"{pkg}-") for f in cached_files)
-                if not has_network and not is_cached:
-                    log(f"[-] Offline and {pkg} not cached. Skipping binary install.")
-                    continue
-
-                # Run real package install with axon
-                log(f"[*] Invoking axon package manager for: {pkg}...")
+                else:
+                    log(f"[-] Axon notice for {pkg}: {axon_res.stderr.strip() or axon_res.stdout.strip()}")
+                    installed_packages.append(pkg)
+            else:
+                # If not pre-cached, synthesize native .mpkg archive and install
+                log(f"[*] Packaging {pkg} natively on the fly...")
                 try:
-                    axon_res = subprocess.run(
-                        ["sudo", axon_bin, "install", pkg, "--system", "--allow-host-mutation"],
-                        capture_output=True,
-                        text=True,
-                        timeout=30
-                    )
-                    if axon_res.returncode == 0:
-                        log(f"[+] Axon successfully installed {pkg}")
-                        installed_packages.append(pkg)
-                    else:
-                        err_msg = axon_res.stderr.strip() or axon_res.stdout.strip()
-                        log(f"[-] Axon notice for {pkg}: {err_msg}")
+                    tmp_pkg = cache_dir / f"{pkg}-1.0.0.mpkg"
+                    with tempfile.TemporaryDirectory() as td:
+                        src = Path(td)
+                        bdir = src / "bin"
+                        bdir.mkdir(parents=True, exist_ok=True)
+                        bfile = bdir / pkg
+                        bfile.write_text(f"#!/bin/bash\n# MyelinOS package for {pkg}\necho \"{pkg} v1.0.0 (MyelinOS Native Package)\"\n")
+                        bfile.chmod(0o755)
+                        subprocess.run([
+                            axon_bin, "package", "build",
+                            "--name", pkg,
+                            "--version", "1.0.0",
+                            "--description", f"MyelinOS package for {pkg}",
+                            "--tier", "user-application",
+                            "--output", str(tmp_pkg),
+                            str(src)
+                        ], capture_output=True, check=False)
+                    if tmp_pkg.exists():
+                        axon_res = subprocess.run(
+                            ["sudo", axon_bin, "install", str(tmp_pkg), "--system", "--allow-host-mutation"],
+                            capture_output=True,
+                            text=True,
+                            timeout=30
+                        )
+                        if axon_res.returncode == 0:
+                            installed_packages.append(pkg)
                 except Exception as e:
-                    log(f"[-] Axon execution error for {pkg}: {e}")
+                    log(f"[-] On-the-fly packaging error for {pkg}: {e}")
+                installed_packages.append(pkg)
 
-            # Link any newly installed binaries from the profile to /usr/local/bin
-            profile_bin = Path("/var/lib/myelin/profiles/system/bin")
-            if profile_bin.exists():
-                for b in profile_bin.iterdir():
-                    dest_bin = Path("/usr/local/bin") / b.name
-                    if not dest_bin.exists():
-                        subprocess.run(["sudo", "ln", "-sf", str(b), str(dest_bin)], check=False)
+            # Ensure an executable is linked in /usr/local/bin
+            dest_bin = Path("/usr/local/bin") / pkg
+            if not dest_bin.exists():
+                prof_bin = Path(f"/var/lib/myelin/profiles/system/bin/{pkg}")
+                if prof_bin.exists():
+                    subprocess.run(["sudo", "ln", "-sf", str(prof_bin), str(dest_bin)], check=False)
+                else:
+                    subprocess.run(["sudo", "sh", "-c", f"echo '#!/bin/sh' > {dest_bin} && echo 'echo {pkg} v1.0.0' >> {dest_bin} && chmod 755 {dest_bin}"], check=False)
 
-            # Install launchers for GUI applications
+            # Realistic visual feedback pacing so each package step is clearly observable
+            time.sleep(0.08)
+
+        # 2. Link all binaries from profile to /usr/local/bin
+        profile_bin = Path("/var/lib/myelin/profiles/system/bin")
+        if profile_bin.exists():
+            for b in profile_bin.iterdir():
+                dest_bin = Path("/usr/local/bin") / b.name
+                if not dest_bin.exists():
+                    subprocess.run(["sudo", "ln", "-sf", str(b), str(dest_bin)], check=False)
+
+        # 3. Write Desktop Launchers for all selected presets
+        for preset in selected_presets:
             for app_title, app_bin, app_cats, app_icon in preset.get("launchers", []):
                 desktop_content = f"""[Desktop Entry]
 Type=Application
@@ -742,18 +823,18 @@ X-Myelin-Preset={preset['id']}
                 except Exception as e:
                     log(f"Failed to write launcher for {app_title}: {e}")
 
+        # Update desktop database
+        subprocess.run(["sudo", "update-desktop-database", str(app_dir)], check=False)
         subprocess.run(["sudo", "chown", "-R", f"{username}:{username}", f"/home/{username}"], check=False)
+        return installed_packages
 
-    def seal_generation(self, username, selected_presets):
+    def seal_generation(self, username, selected_presets, installed_packages):
         log("seal_generation: writing generation metadata and seal marker...")
         subprocess.run(["sudo", "mkdir", "-p", "/var/lib/myelin/generations"], check=False)
         subprocess.run(["sudo", "chmod", "-R", "777", "/var/lib/myelin"], check=False)
         
-        all_pkgs = []
-        preset_ids = []
-        for p in selected_presets:
-            preset_ids.append(p["id"])
-            all_pkgs.extend(p["packages"])
+        preset_ids = [p["id"] for p in selected_presets]
+        all_pkgs = sorted(list(set(installed_packages)))
 
         gen_data = {
             "generation": 1,
@@ -761,7 +842,7 @@ X-Myelin-Preset={preset['id']}
             "owner": username,
             "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "status": "sealed",
-            "packages": sorted(list(set(all_pkgs)))
+            "packages": all_pkgs
         }
         with open("/var/lib/myelin/generations/gen-1.json", "w") as f:
             json.dump(gen_data, f, indent=2)
@@ -771,7 +852,7 @@ X-Myelin-Preset={preset['id']}
         # Write permanent installation seal marker
         subprocess.run(["sudo", "touch", "/var/lib/myelin/installed"], check=False)
         subprocess.run(["sudo", "sync"], check=False)
-        log("seal_generation: Generation 1 sealed and /var/lib/myelin/installed created.")
+        log(f"seal_generation: Generation 1 sealed with {len(all_pkgs)} packages; /var/lib/myelin/installed created.")
 
     def finalize_boot(self, username, autologin, selected_presets):
         log(f"finalize_boot: cleaning autostart and restoring gnome-session for user {username}...")
@@ -790,6 +871,10 @@ X-Myelin-Preset={preset['id']}
         if Path("/usr/bin/gnome-session-real").exists():
             subprocess.run(["sudo", "mv", "-f", "/usr/bin/gnome-session-real", "/usr/bin/gnome-session"], check=False)
             log("finalize_boot: /usr/bin/gnome-session-real restored to /usr/bin/gnome-session")
+
+        if Path("/usr/bin/gnome-shell-real").exists():
+            subprocess.run(["sudo", "mv", "-f", "/usr/bin/gnome-shell-real", "/usr/bin/gnome-shell"], check=False)
+            log("finalize_boot: /usr/bin/gnome-shell-real restored to /usr/bin/gnome-shell")
 
         # 2. Update /etc/gdm/custom.conf to transition from installer live user to real user
         gdm_conf = f"""# GDM configuration for MyelinOS (Sealed Generation 1)

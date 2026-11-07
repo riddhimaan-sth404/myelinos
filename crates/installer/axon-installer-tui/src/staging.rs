@@ -358,6 +358,41 @@ where
         }
     }
 
+    // Configure GNOME Shell initial-setup kiosk mode (completely empty panel, no overview, no dash)
+    let modes_dir = target_mount.join("usr/share/gnome-shell/modes");
+    let _ = fs::create_dir_all(&modes_dir);
+    let initial_setup_mode = r#"{
+    "hasWindows": true,
+    "components": [],
+    "panel": {
+        "left": [],
+        "center": [],
+        "right": []
+    }
+}
+"#;
+    let _ = fs::write(modes_dir.join("initial-setup.json"), initial_setup_mode);
+
+    // Ensure GNOME Shell runs in initial-setup kiosk mode while installation is pending
+    let gnome_shell = target_mount.join("usr/bin/gnome-shell");
+    let gnome_shell_real = target_mount.join("usr/bin/gnome-shell-real");
+    if gnome_shell.exists() && !gnome_shell_real.exists() {
+        let _ = fs::rename(&gnome_shell, &gnome_shell_real);
+    }
+    let shell_wrapper = r#"#!/bin/bash
+if [ ! -f /var/lib/myelin/installed ] && [ -x /usr/bin/myelin-installer-gui ]; then
+    exec /usr/bin/gnome-shell-real --mode=initial-setup "$@"
+else
+    exec /usr/bin/gnome-shell-real "$@"
+fi
+"#;
+    let _ = fs::write(&gnome_shell, shell_wrapper);
+    if let Ok(meta) = fs::metadata(&gnome_shell) {
+        let mut perms = meta.permissions();
+        perms.set_mode(0o755);
+        let _ = fs::set_permissions(&gnome_shell, perms);
+    }
+
     // Ensure Stage 2 GUI launches reliably upon graphical desktop initialization
     let gnome_session = target_mount.join("usr/bin/gnome-session");
     let gnome_session_real = target_mount.join("usr/bin/gnome-session-real");
@@ -371,16 +406,18 @@ if [ ! -f /var/lib/myelin/installed ] && [ -x /usr/bin/myelin-installer-gui ]; t
             if [ -S "/run/user/$(id -u)/wayland-0" ]; then break; fi
             sleep 0.5
         done
-        sleep 1.5
+        sleep 1.0
         export WAYLAND_DISPLAY=wayland-0
         export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+        export GSK_RENDERER=cairo
+        export GDK_BACKEND=wayland
         /usr/bin/python3 /usr/bin/myelin-installer-gui >> /tmp/myelin-installer.log 2>&1
     ) &
 fi
 if [ -x /usr/bin/gnome-session-real ]; then
     exec /usr/bin/gnome-session-real "$@"
 else
-    exec /usr/bin/gnome-shell --mode=user
+    exec /usr/bin/gnome-shell --mode=initial-setup
 fi
 "#;
     let _ = fs::write(&gnome_session, wrapper_script);

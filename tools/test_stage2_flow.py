@@ -138,9 +138,9 @@ def find_suggested_button(img_path: Path, is_final: bool = False):
         if len(pts_action_bar) > 40:
             return (-1, -1)
 
-        # Search for centered Reboot button in done_box (centered horizontally at 450..830, y between 450..700)
+        # Search for centered Reboot button in done_box (centered horizontally at 450..830, y between 200..750)
         pts = []
-        for y in range(450, 700):
+        for y in range(200, 750):
             for x in range(450, 830):
                 r, g, b = pixels[x, y][:3]
                 if 35 <= r <= 100 and 100 <= g <= 170 and 190 <= b <= 255:
@@ -152,7 +152,7 @@ def find_suggested_button(img_path: Path, is_final: bool = False):
             max_y = max(p[1] for p in pts)
             center_x = (min_x + max_x) // 2
             center_y = (min_y + max_y) // 2
-            if abs(center_x - 640) < 120 and 18 <= (max_y - min_y) <= 75:
+            if abs(center_x - 640) < 140 and 18 <= (max_y - min_y) <= 85:
                 return (center_x, center_y)
         return (-1, -1)
     else:

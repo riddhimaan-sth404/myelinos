@@ -241,7 +241,7 @@ def build_initramfs():
         if cache_dir.exists():
             dest_cache = myelin_share / "packages"
             dest_cache.mkdir(parents=True, exist_ok=True)
-            for pkg in cache_dir.glob("*.pkg.tar.zst"):
+            for pkg in sorted(list(cache_dir.glob("*.pkg.tar.zst")) + list(cache_dir.glob("*.mpkg"))):
                 print(f"[*] Embedding cached package {pkg.name} into initramfs...")
                 shutil.copy2(pkg, dest_cache / pkg.name)
 
